@@ -1,0 +1,97 @@
+# ASUS GPU Mode Switch — "Go Time" & "Eco Mode"
+
+Two one-click executables that switch the **GPU Mode** on ASUS laptops — the same
+Standard / Eco switch that lives in *Armoury Crate → Devices → System Settings →
+GPU Performance* — without opening Armoury Crate at all.
+
+| Executable | What it does |
+|---|---|
+| **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
+| **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
+
+## Download
+
+Grab both executables from the
+[**Releases**](../../releases/latest) page — individually or as a single zip.
+
+## Requirements
+
+- An **ASUS laptop with a dedicated GPU** (ROG, Zephyrus, Strix, TUF, Vivobook Pro, Zenbook Pro…)
+- Windows 10 or 11 (nothing else needs to be installed — the apps use the .NET
+  Framework that ships with Windows)
+- The **ASUS System Control Interface** drivers must be present. They ship with
+  Armoury Crate or MyASUS, so if either of those has ever been installed, you're set.
+- Administrator rights — a UAC prompt when you double-click is expected and normal.
+
+## How to use
+
+1. Close games and other apps that are using the dGPU.
+2. Double-click **Go Time.exe** or **Eco Mode.exe**, confirm the UAC prompt.
+3. Wait for the green/red result screen, then click **Restart now** (a restart is
+   required for the display path / dGPU power state to fully apply).
+
+Run either app with `--status` (e.g. from a terminal) to see the detected
+hardware interface and the current GPU state without switching anything.
+
+## How it works
+
+Armoury Crate is just a UI on top of a BIOS-level switch. Both apps call that
+switch directly through the ASUS WMI interface (`root\WMI`, class `ASUS_WMI`,
+methods `DSTS` = read / `DEVS` = write):
+
+| Device ID | Function | Values |
+|---|---|---|
+| `0x00090020` | dGPU power (Vivobook: `0x00090120`) | 0 = on, 1 = off (eco) |
+| `0x00090016` | GPU MUX (Vivobook: `0x00090026`) | 0 = dGPU direct, 1 = Optimus/hybrid |
+
+Both apps keep the MUX on the hybrid path and toggle dGPU power — exactly what
+Armoury Crate's *Standard* and *Eco* cards do. The apps auto-detect which
+endpoint pair your firmware implements and verify the change by reading the
+state back. If Armoury Crate is installed, its UI will show the new mode the
+next time you open it.
+
+References: the [Linux kernel `asus-wmi` driver](https://github.com/torvalds/linux/blob/master/include/linux/platform_data/x86/asus-wmi.h)
+(which documents these device IDs) and [G-Helper](https://github.com/seerge/g-helper)
+(the open-source ASUS control app that uses the same interface on Windows).
+
+## Troubleshooting
+
+- **"ASUS hardware interface not found"** — the ASUS drivers aren't installed.
+  Install Armoury Crate (or MyASUS → customer service → driver updates) first.
+- **Switch doesn't stick / "refused"** — something is still using the dGPU
+  (game, browser with hardware acceleration, XG Mobile). Close it and retry.
+- **"ASUS WMI interface not found" on a desktop or another brand** — expected;
+  this is laptop firmware, it doesn't exist there.
+- **Windows SmartScreen warning on first run** — the exes are unsigned.
+  Click *More info* → *Run anyway*.
+- **Stays in the old mode until you restart** — by design; the MUX/power change
+  finalizes on reboot.
+
+## Building from source
+
+`src\build.cmd` — that's it. It compiles both executables with the C# compiler
+that ships with Windows (`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`),
+so no Visual Studio or .NET SDK is needed.
+
+```
+asus-gpu-mode-switch/
+├── src/
+│   ├── GpuModeSwitch.cs   ← single source, both apps
+│   ├── app.manifest       ← requires administrator
+│   └── build.cmd          ← builds dist\Go Time.exe + dist\Eco Mode.exe
+├── LICENSE (MIT)
+└── README.md
+```
+
+## Limitations
+
+- Laptops only — desktop motherboards don't expose this interface.
+- The "Optimized" (Advanced Optimus auto-switch) mode is not supported;
+  these apps switch between Standard and Eco only.
+- Model-specific quirks exist. If your machine reports the interface as missing
+  or refuses writes even with everything closed, open an issue with the output
+  of `Eco Mode.exe --status`.
+
+## License
+
+[MIT](LICENSE)

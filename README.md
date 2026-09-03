@@ -9,6 +9,11 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.1** — switched from the `ASUS_WMI` WMI class to the direct ACPI device
+> (`\\.\ATKACPI`) that modern firmware actually uses. This fixes the
+> *"ASUS hardware interface not found"* error on models like the
+> **ROG Strix G15 (G513QR)**. The WMI classes remain as fallback.
+
 ## Download
 
 Grab both executables from the
@@ -36,8 +41,16 @@ hardware interface and the current GPU state without switching anything.
 ## How it works
 
 Armoury Crate is just a UI on top of a BIOS-level switch. Both apps call that
-switch directly through the ASUS WMI interface (`root\WMI`, class `ASUS_WMI`,
-methods `DSTS` = read / `DEVS` = write):
+switch directly, trying these channels in order until one answers:
+
+1. **Direct ACPI device I/O** — `\\.\ATKACPI` via `DeviceIoControl`
+   (control code `0x0022240C`, methods `DSTS` = read / `DEVS` = write).
+   This is what G513QR-class firmware uses and is the primary path.
+2. **WMI class `AsusAtkWmi_WMNB`** (`root\WMI`) — older ATK-era firmware.
+3. **WMI class `ASUS_WMI`** (`root\WMI`) — other firmware generations.
+
+The device IDs being switched (documented by the Linux kernel `asus-wmi`
+driver and used by G-Helper):
 
 | Device ID | Function | Values |
 |---|---|---|
@@ -56,8 +69,10 @@ References: the [Linux kernel `asus-wmi` driver](https://github.com/torvalds/lin
 
 ## Troubleshooting
 
-- **"ASUS hardware interface not found"** — the ASUS drivers aren't installed.
-  Install Armoury Crate (or MyASUS → customer service → driver updates) first.
+- **"ASUS hardware interface not found"** — the ASUS System Control Interface
+  driver isn't answering. Install or *repair* Armoury Crate (or MyASUS →
+  customer service → driver updates), reboot, and try again. Run the app with
+  `--status` to see exactly which channels were tried.
 - **Switch doesn't stick / "refused"** — something is still using the dGPU
   (game, browser with hardware acceleration, XG Mobile). Close it and retry.
 - **"ASUS WMI interface not found" on a desktop or another brand** — expected;

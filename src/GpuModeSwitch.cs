@@ -1,15 +1,18 @@
-//  GpuModeSwitch.cs
-//  ----------------
+//  GpuModeSwitch.cs  (v1.0.1)
+//  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
 //
-//  Both talk straight to the ASUS WMI/ACPI interface (namespace root\WMI,
-//  class ASUS_WMI, methods DSTS = read, DEVS = write). This is the same
-//  BIOS-level switch Armoury Crate drives from its "GPU Performance" page,
-//  so Armoury Crate does not need to be running (or installed) for this to work.
+//  v1.0.1: talks to the ASUS ACPI device \\.\ATKACPI directly via
+//  DeviceIoControl (control code 0x0022240C, methods DSTS = read /
+//  DEVS = write) - this is what recent ASUS firmware generations such as the
+//  ROG Strix G15 (G513QR) actually respond to. Falls back to the WMI classes
+//  AsusAtkWmi_WMNB and ASUS_WMI (root\WMI) on older/other firmware.
+//  This is the same BIOS-level switch Armoury Crate drives from its
+//  "GPU Performance" page; Armoury Crate does not need to be running.
 //
-//  Device IDs follow the Linux kernel asus-wmi driver and G-Helper:
+//  Device IDs (Linux kernel asus-wmi driver / G-Helper):
 //    0x00090020  dGPU power  (0 = enabled, 1 = disabled)      [Vivobook: 0x00090120]
 //    0x00090016  GPU MUX     (0 = dGPU direct, 1 = Optimus/hybrid) [Vivobook: 0x00090026]
 //
@@ -36,10 +39,10 @@ namespace GpuModeSwitch
                 string.Equals(args[0], "--status", StringComparison.OrdinalIgnoreCase))
             {
 #if MODE_ECO
-                MessageBox.Show(AsusWmi.DescribeState(), "Eco Mode - status",
+                MessageBox.Show(AsusControl.DescribeState(), "Eco Mode - status",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
 #else
-                MessageBox.Show(AsusWmi.DescribeState(), "Go Time - status",
+                MessageBox.Show(AsusControl.DescribeState(), "Go Time - status",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
 #endif
                 return;
@@ -51,70 +54,200 @@ namespace GpuModeSwitch
         }
     }
 
-    internal class SwitchOutcome
+    // ---------------------------------------------------------------------
+    // Transport abstraction: a channel that can read/write ASUS ACPI device
+    // values. Two kinds exist: direct kernel I/O on \\.\ATKACPI, and WMI.
+    // ---------------------------------------------------------------------
+    internal abstract class AsusTransport
     {
-        public bool Ok;
-        public bool Changed;
-        public bool NeedsRestart;
-        public string Headline = "";
-        public string Detail = "";
+        public abstract string Name { get; }
+        public abstract bool Open();
+        public abstract void Close();
+        public abstract int ReadRaw(uint deviceId);              // -1 = failed
+        public abstract bool Write(uint deviceId, uint value);   // true = firmware OK
     }
 
-    internal static class AsusWmi
+    // Primary: direct DeviceIoControl on \\.\ATKACPI (works on G513QR and all
+    // recent ROG/TUF/Strix/Zephyrus firmware with the ASUS Optimization driver).
+    internal class AtkAcpiTransport : AsusTransport
     {
-        private const uint DGPU_ID = 0x00090020;       // dGPU power: 0 = on, 1 = off (ROG / TUF / Zephyrus / Strix)
-        private const uint DGPU_ID_VIVO = 0x00090120;  // Vivobook / Zenbook Pro variant
-        private const uint MUX_ID = 0x00090016;        // MUX: 0 = dGPU direct, 1 = Optimus/hybrid
-        private const uint MUX_ID_VIVO = 0x00090026;   // Vivobook / Zenbook Pro variant
+        private const string DEVICE_NAME = "\\\\.\\ATKACPI";
+        private const uint IOCTL_CONTROL = 0x0022240C;
+        private const uint METHOD_DSTS = 0x53545344;   // read
+        private const uint METHOD_DEVS = 0x53564544;   // write
 
-        private static ManagementClass _class;
-        private static bool _probed;
-        private static uint _dgpuId;
-        private static uint _muxId;
-        private static bool _muxSupported;
+        private const uint GENERIC_READ = 0x80000000;
+        private const uint GENERIC_WRITE = 0x40000000;
+        private const uint OPEN_EXISTING = 3;
+        private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
+        private const uint FILE_SHARE_READ = 1;
+        private const uint FILE_SHARE_WRITE = 2;
 
-        public static bool Available { get { return Probe(); } }
-        public static bool MuxSupported { get { Probe(); return _muxSupported; } }
+        private IntPtr _handle = IntPtr.Zero;
 
-        private static bool Probe()
+        public override string Name { get { return "direct ACPI device (\\\\.\\ATKACPI)"; } }
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern IntPtr CreateFile(string lpFileName, uint dwDesiredAccess,
+            uint dwShareMode, IntPtr lpSecurityAttributes, uint dwCreationDisposition,
+            uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool DeviceIoControl(IntPtr hDevice, uint dwIoControlCode,
+            byte[] lpInBuffer, uint nInBufferSize, byte[] lpOutBuffer, uint nOutBufferSize,
+            ref uint lpBytesReturned, IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        public override bool Open()
         {
-            if (_probed) return _dgpuId != 0;
-            _probed = true;
-
-            try
-            {
-                _class = new ManagementClass("root\\WMI", "ASUS_WMI", null);
-                _class.Get();
-            }
-            catch
-            {
-                _class = null;
-                return false;
-            }
-
-            // Pick the endpoint pair this firmware actually implements.
-            if (ReadRaw(DGPU_ID) >= 0) _dgpuId = DGPU_ID;
-            else if (ReadRaw(DGPU_ID_VIVO) >= 0) _dgpuId = DGPU_ID_VIVO;
-            if (_dgpuId == 0) return false;
-
-            if (ReadRaw(MUX_ID) >= 0) { _muxId = MUX_ID; _muxSupported = true; }
-            else if (ReadRaw(MUX_ID_VIVO) >= 0) { _muxId = MUX_ID_VIVO; _muxSupported = true; }
-
+            if (_handle != IntPtr.Zero) return true;
+            IntPtr h = CreateFile(DEVICE_NAME,
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                IntPtr.Zero, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
+            if (h == new IntPtr(-1) || h == IntPtr.Zero) return false;
+            _handle = h;
             return true;
         }
 
-        private static int ReadRaw(uint id)
+        public override void Close()
+        {
+            if (_handle != IntPtr.Zero) { CloseHandle(_handle); _handle = IntPtr.Zero; }
+        }
+
+        // Buffer layout: [methodId u32][args byte-length u32][args]
+        // args for DSTS: [deviceId u32][0 u32];  for DEVS: [deviceId u32][value u32]
+        // Output: 16 bytes; DSTS -> result int at offset 0 (includes 0x10000 status
+        // bit), DEVS -> 1 on success.
+        private byte[] CallMethod(uint methodId, byte[] methodArgs)
+        {
+            byte[] inBuf = new byte[8 + methodArgs.Length];
+            byte[] outBuf = new byte[16];
+            BitConverter.GetBytes(methodId).CopyTo(inBuf, 0);
+            BitConverter.GetBytes((uint)methodArgs.Length).CopyTo(inBuf, 4);
+            Array.Copy(methodArgs, 0, inBuf, 8, methodArgs.Length);
+
+            uint returned = 0;
+            if (!DeviceIoControl(_handle, IOCTL_CONTROL, inBuf, (uint)inBuf.Length,
+                outBuf, (uint)outBuf.Length, ref returned, IntPtr.Zero))
+                return null;
+            return outBuf;
+        }
+
+        public override int ReadRaw(uint deviceId)
+        {
+            if (_handle == IntPtr.Zero) return -1;
+            byte[] args = new byte[8];
+            BitConverter.GetBytes(deviceId).CopyTo(args, 0);
+            byte[] outBuf = CallMethod(METHOD_DSTS, args);
+            if (outBuf == null || outBuf.Length < 4) return -1;
+            return BitConverter.ToInt32(outBuf, 0);
+        }
+
+        public override bool Write(uint deviceId, uint value)
+        {
+            if (_handle == IntPtr.Zero) return false;
+            byte[] args = new byte[8];
+            BitConverter.GetBytes(deviceId).CopyTo(args, 0);
+            BitConverter.GetBytes(value).CopyTo(args, 4);
+            byte[] outBuf = CallMethod(METHOD_DEVS, args);
+            if (outBuf == null || outBuf.Length < 4) return false;
+            return BitConverter.ToInt32(outBuf, 0) == 1;
+        }
+    }
+
+    // Fallback: WMI classes in root\WMI. Different firmware generations expose
+    // different classes (AsusAtkWmi_WMNB on ATK-era firmware, ASUS_WMI on others).
+    internal class WmiTransport : AsusTransport
+    {
+        private readonly string _className;
+        private ManagementObject _object;
+
+        public WmiTransport(string className) { _className = className; }
+
+        public override string Name { get { return "WMI root\\WMI class " + _className; } }
+
+        public override bool Open()
+        {
+            if (_object != null) return true;
+            try
+            {
+                ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    "root\\WMI", "SELECT * FROM " + _className);
+                ManagementObjectCollection results = searcher.Get();
+                foreach (ManagementObject o in results) { _object = o; break; }
+                results.Dispose();
+                searcher.Dispose();
+                return _object != null;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public override void Close() { _object = null; }
+
+        private static PropertyData FindProperty(PropertyDataCollection properties, string name)
+        {
+            foreach (PropertyData p in properties)
+            {
+                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p;
+            }
+            return null;
+        }
+
+        private static void AssignInParams(ManagementBaseObject inParams, uint id, uint value)
+        {
+            PropertyData pId = FindProperty(inParams.Properties, "Device_ID");
+            PropertyData pVal = FindProperty(inParams.Properties, "Control_Status");
+            if (pVal == null) pVal = FindProperty(inParams.Properties, "Value");
+
+            if (pId != null && pVal != null)
+            {
+                pId.Value = id;
+                pVal.Value = value;
+                return;
+            }
+
+            int i = 0;
+            foreach (PropertyData p in inParams.Properties)
+            {
+                p.Value = i == 0 ? (object)id : (object)value;
+                i++;
+                if (i >= 2) break;
+            }
+        }
+
+        private static uint ToUint(object v)
+        {
+            return v == null ? 0 : Convert.ToUInt32(v);
+        }
+
+        public override int ReadRaw(uint deviceId)
         {
             try
             {
-                ManagementBaseObject inParams = _class.GetMethodParameters("DSTS");
-                AssignInParams(inParams, id, 0);
-                ManagementBaseObject outParams = _class.InvokeMethod("DSTS", inParams, null);
+                ManagementBaseObject inParams = _object.GetMethodParameters("DSTS");
+                AssignInParams(inParams, deviceId, 0);
+                ManagementBaseObject outParams = _object.InvokeMethod("DSTS", inParams, null);
                 if (outParams == null) return -1;
 
                 PropertyData val = FindProperty(outParams.Properties, "Return_Value");
                 if (val == null) val = FindProperty(outParams.Properties, "result");
-                if (val == null) val = FindProperty(outParams.Properties, "Value");
+                if (val == null)
+                {
+                    foreach (PropertyData p in outParams.Properties)
+                    {
+                        if (!string.Equals(p.Name, "ReturnValue", StringComparison.OrdinalIgnoreCase))
+                        {
+                            val = p;
+                            break;
+                        }
+                    }
+                }
                 if (val == null || val.Value == null) return -1;
                 return unchecked((int)ToUint(val.Value));
             }
@@ -124,13 +257,13 @@ namespace GpuModeSwitch
             }
         }
 
-        private static bool WriteValue(uint id, uint value)
+        public override bool Write(uint deviceId, uint value)
         {
             try
             {
-                ManagementBaseObject inParams = _class.GetMethodParameters("DEVS");
-                AssignInParams(inParams, id, value);
-                ManagementBaseObject outParams = _class.InvokeMethod("DEVS", inParams, null);
+                ManagementBaseObject inParams = _object.GetMethodParameters("DEVS");
+                AssignInParams(inParams, deviceId, value);
+                ManagementBaseObject outParams = _object.InvokeMethod("DEVS", inParams, null);
                 if (outParams == null) return true;
 
                 PropertyData rc = FindProperty(outParams.Properties, "result");
@@ -144,19 +277,104 @@ namespace GpuModeSwitch
                 return false;
             }
         }
+    }
+
+    internal class SwitchOutcome
+    {
+        public bool Ok;
+        public bool Changed;
+        public bool NeedsRestart;
+        public string Headline = "";
+        public string Detail = "";
+    }
+
+    // ---------------------------------------------------------------------
+    // High-level control: picks a working transport + device IDs, then
+    // switches the GPU mode with read-back verification.
+    // ---------------------------------------------------------------------
+    internal static class AsusControl
+    {
+        private const uint DGPU_ID = 0x00090020;       // dGPU power: 0 = on, 1 = off (ROG / TUF / Zephyrus / Strix)
+        private const uint DGPU_ID_VIVO = 0x00090120;  // Vivobook / Zenbook Pro variant
+        private const uint MUX_ID = 0x00090016;        // MUX: 0 = dGPU direct, 1 = Optimus/hybrid
+        private const uint MUX_ID_VIVO = 0x00090026;   // Vivobook / Zenbook Pro variant
+
+        private static AsusTransport _transport;
+        private static bool _probed;
+        private static uint _dgpuId;
+        private static uint _muxId;
+        private static bool _muxSupported;
+        private static string _lastError = "Unknown error.";
+
+        public static bool Available { get { return Probe(); } }
+        public static bool MuxSupported { get { Probe(); return _muxSupported; } }
+        public static string LastError { get { return _lastError; } }
+
+        // DSTS results carry a 0x10000 status bit; some models return the plain
+        // value instead. Accept either representation.
+        private static int NormalizeState(int raw)
+        {
+            if (raw < 0) return -1;
+            int v = raw - 0x10000;
+            if (v == 0 || v == 1) return v;
+            v = raw & 0xFFFF;
+            if (v == 0 || v == 1) return v;
+            return -1;
+        }
+
+        private static bool Probe()
+        {
+            if (_probed) return _transport != null;
+            _probed = true;
+
+            AsusTransport[] candidates = new AsusTransport[]
+            {
+                new AtkAcpiTransport(),
+                new WmiTransport("AsusAtkWmi_WMNB"),
+                new WmiTransport("ASUS_WMI"),
+            };
+            uint[] dgpuIds = new uint[] { DGPU_ID, DGPU_ID_VIVO };
+            uint[] muxIds = new uint[] { MUX_ID, MUX_ID_VIVO };
+
+            foreach (AsusTransport t in candidates)
+            {
+                if (!t.Open()) continue;
+
+                for (int i = 0; i < dgpuIds.Length; i++)
+                {
+                    int dgpu = NormalizeState(t.ReadRaw(dgpuIds[i]));
+                    if (dgpu < 0) continue;
+
+                    // dGPU endpoint answers - this transport and ID pair are it.
+                    _transport = t;
+                    _dgpuId = dgpuIds[i];
+                    _muxId = muxIds[i];
+                    _muxSupported = NormalizeState(t.ReadRaw(_muxId)) >= 0;
+                    return true;
+                }
+                t.Close();
+            }
+
+            _lastError =
+                "No ASUS control interface answered on this PC.\n\n" +
+                "Tried: the ACPI device \\\\.\\ATKACPI and the WMI classes\n" +
+                "AsusAtkWmi_WMNB / ASUS_WMI (root\\WMI).\n\n" +
+                "These are provided by the \"ASUS System Control Interface\"\n" +
+                "driver that comes with Armoury Crate / MyASUS. Install or\n" +
+                "repair Armoury Crate, reboot, and run this app again.";
+            return false;
+        }
 
         public static int GetDgpuState()
         {
             if (!Available) return -1;
-            int raw = ReadRaw(_dgpuId);
-            return raw < 0 ? -1 : (int)((uint)raw & 0xFFFF);
+            return NormalizeState(_transport.ReadRaw(_dgpuId));
         }
 
         public static int GetMuxState()
         {
             if (!MuxSupported) return -1;
-            int raw = ReadRaw(_muxId);
-            return raw < 0 ? -1 : (int)((uint)raw & 0xFFFF);
+            return NormalizeState(_transport.ReadRaw(_muxId));
         }
 
         public static SwitchOutcome SwitchTo(bool eco)
@@ -166,10 +384,7 @@ namespace GpuModeSwitch
             if (!Available)
             {
                 o.Headline = "ASUS hardware interface not found";
-                o.Detail = "The ASUS WMI interface (root\\WMI, class ASUS_WMI) is missing.\n" +
-                           "Install Armoury Crate or MyASUS first so the ASUS System Control\n" +
-                           "Interface drivers are present, then run this app again.\n" +
-                           "(It cannot run on desktops or non-ASUS machines.)";
+                o.Detail = _lastError;
                 return o;
             }
 
@@ -181,7 +396,7 @@ namespace GpuModeSwitch
             // If the MUX is currently on dGPU-direct, move it back first.
             if (MuxSupported && muxBefore == 0)
             {
-                if (!WriteValue(_muxId, 1))
+                if (!_transport.Write(_muxId, 1))
                 {
                     o.Headline = "Could not switch the MUX back to hybrid";
                     o.Detail = "The firmware refused the MUX change.\nRestart the laptop and run this again.";
@@ -193,7 +408,7 @@ namespace GpuModeSwitch
             int want = eco ? 1 : 0;
             if (gpuBefore != want)
             {
-                if (!WriteValue(_dgpuId, (uint)want))
+                if (!_transport.Write(_dgpuId, (uint)want))
                 {
                     o.Headline = "The dGPU power change was refused";
                     o.Detail = eco
@@ -236,18 +451,17 @@ namespace GpuModeSwitch
             return o;
         }
 
+        public static void Shutdown()
+        {
+            if (_transport != null) _transport.Close();
+        }
+
         public static string DescribeState()
         {
-            if (!Available)
-            {
-                return "ASUS WMI interface (root\\WMI / ASUS_WMI) was not found.\n\n" +
-                       "This tool only works on ASUS laptops that have the ASUS System\n" +
-                       "Control Interface drivers (bundled with Armoury Crate / MyASUS).\n" +
-                       "It cannot run on desktops or other brands.";
-            }
+            if (!Available) return _lastError;
 
             int gpu = GetDgpuState();
-            string s = "ASUS WMI: OK (root\\WMI / ASUS_WMI)\n";
+            string s = "Connected via: " + _transport.Name + "\n";
             s += "dGPU control endpoint: 0x" + _dgpuId.ToString("X8") + "\n";
             s += "dGPU power: " + StateText(gpu, "enabled", "disabled (eco)") + "\n";
             if (MuxSupported)
@@ -274,45 +488,6 @@ namespace GpuModeSwitch
             if (state == 0) return zeroText;
             if (state == 1) return oneText;
             return "unknown (" + state + ")";
-        }
-
-        // ---- WMI plumbing helpers (parameter names vary slightly between
-        // ---- firmware generations, so match by name, fall back to position)
-
-        private static void AssignInParams(ManagementBaseObject inParams, uint id, uint value)
-        {
-            PropertyData pId = FindProperty(inParams.Properties, "Device_ID");
-            PropertyData pVal = FindProperty(inParams.Properties, "Control_Status");
-            if (pVal == null) pVal = FindProperty(inParams.Properties, "Value");
-
-            if (pId != null && pVal != null)
-            {
-                pId.Value = id;
-                pVal.Value = value;
-                return;
-            }
-
-            int i = 0;
-            foreach (PropertyData p in inParams.Properties)
-            {
-                p.Value = i == 0 ? (object)id : (object)value;
-                i++;
-                if (i >= 2) break;
-            }
-        }
-
-        private static PropertyData FindProperty(PropertyDataCollection properties, string name)
-        {
-            foreach (PropertyData p in properties)
-            {
-                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p;
-            }
-            return null;
-        }
-
-        private static uint ToUint(object v)
-        {
-            return v == null ? 0 : Convert.ToUInt32(v);
         }
     }
 
@@ -372,7 +547,7 @@ namespace GpuModeSwitch
 
             _detail.ForeColor = Color.FromArgb(165, 165, 172);
             _detail.AutoSize = false;
-            _detail.Size = new Size(432, 72);
+            _detail.Size = new Size(432, 86);
             _detail.Location = new Point(24, 140);
             _detail.BackColor = Color.Transparent;
 
@@ -405,6 +580,7 @@ namespace GpuModeSwitch
 
             TryDarkTitleBar();
             Shown += delegate { OnRun(); };
+            FormClosed += delegate { AsusControl.Shutdown(); };
         }
 
         private void OnRun()
@@ -415,7 +591,7 @@ namespace GpuModeSwitch
             SwitchOutcome r;
             try
             {
-                r = AsusWmi.SwitchTo(TargetEco);
+                r = AsusControl.SwitchTo(TargetEco);
             }
             catch (Exception ex)
             {

@@ -1,19 +1,13 @@
-//  GpuModeSwitch.cs  (v1.0.8)
+//  GpuModeSwitch.cs  (v1.0.9)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
 //
-//  v1.0.8 changes:
-//    - Themed UI: borderless rounded dark window with the app logo, an
-//      animated shimmer bar while probing/applying, and a fade-in. The whole
-//      window is draggable. The switch runs on a background thread so the
-//      animation stays smooth.
-//    - "Apply with confirm" flow: after probing, the app shows the detected
-//      state and waits for Apply. Run with --auto to switch without
-//      confirmation.
-//    - Go Time icon rebuilt: NVIDIA eye on a gradient tile with truly
-//      transparent rounded corners (no more white corners at any size).
+//  v1.0.9 changes:
+//    - One-click is the default again: probe -> apply -> result, with the
+//      themed window + shimmer animation the whole time. The confirm step
+//      from v1.0.8 is still available behind an opt-in --confirm flag.
 //
 //  v1.0.7: main + log windows appear on the taskbar with the app icon.
 //  v1.0.6: application icons. v1.0.5: bare-zero DSTS = device not implemented.
@@ -51,7 +45,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.8";
+        public const string Version = "1.0.9";
 
         [STAThread]
         private static void Main(string[] args)
@@ -62,13 +56,13 @@ namespace GpuModeSwitch
             Logger.Init("Go Time", "GoTime");
 #endif
 
-            bool auto = false;
+            bool confirm = false;
             bool statusOnly = false;
             if (args != null)
             {
                 foreach (string a in args)
                 {
-                    if (string.Equals(a, "--auto", StringComparison.OrdinalIgnoreCase)) auto = true;
+                    if (string.Equals(a, "--confirm", StringComparison.OrdinalIgnoreCase)) confirm = true;
                     if (string.Equals(a, "--status", StringComparison.OrdinalIgnoreCase)) statusOnly = true;
                 }
             }
@@ -87,7 +81,7 @@ namespace GpuModeSwitch
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(auto));
+            Application.Run(new MainForm(confirm));
         }
     }
 
@@ -1037,7 +1031,7 @@ namespace GpuModeSwitch
         private readonly Button _close = new Button();
         private readonly Button _x = new Button();
         private readonly System.Windows.Forms.Timer _clock = new System.Windows.Forms.Timer();
-        private readonly bool _autoMode;
+        private readonly bool _confirmMode;
         private UiPhase _phase = UiPhase.Probe;
         private SwitchOutcome _last;
 
@@ -1053,9 +1047,9 @@ namespace GpuModeSwitch
         private readonly Color _accent = Color.FromArgb(255, 70, 85);
 #endif
 
-        public MainForm(bool autoMode)
+        public MainForm(bool confirmMode)
         {
-            _autoMode = autoMode;
+            _confirmMode = confirmMode;
 
             Text = TargetEco ? "Eco Mode" : "Go Time";
             FormBorderStyle = FormBorderStyle.None;
@@ -1257,9 +1251,10 @@ namespace GpuModeSwitch
                         EnterResult(false, "ASUS hardware interface not found", msg);
                         return;
                     }
-                    if (_autoMode)
+                    if (!_confirmMode)
                     {
-                        Logger.Line("UI: --auto given, applying without confirm");
+                        // One-click: flow straight from probing into applying.
+                        Logger.Line("UI: one-click mode, applying right away");
                         BeginApply();
                         return;
                     }

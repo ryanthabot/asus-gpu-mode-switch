@@ -9,6 +9,12 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.5** — fixed MUX misdetection diagnosed from a G513QR log: a bare-zero
+> DSTS response (no status bits) now correctly means *"device not implemented
+> by this firmware"* instead of *"MUX in dGPU-direct mode"*. On MUX-less
+> machines like the G513QR the apps now skip the MUX entirely and do a pure
+> live dGPU power toggle — no MUX writes, no restart flow.
+>
 > **v1.0.4** — the live switch is now **always attempted first**, exactly like
 > Armoury Crate: just flip the dGPU power flag, no restart. The MUX/one-time
 > restart flow was demoted to a fallback that only kicks in if the firmware

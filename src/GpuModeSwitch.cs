@@ -1,26 +1,23 @@
-//  GpuModeSwitch.cs  (v1.0.4)
+//  GpuModeSwitch.cs  (v1.0.5)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
 //
-//  v1.0.4 changes:
-//    - The live dGPU power toggle is now ALWAYS attempted first, exactly like
-//      Armoury Crate - even when the MUX register reads dGPU-direct (which
-//      happens transiently on dynamic-switch machines). The MUX two-step
-//      restart flow is only a fallback, used when the firmware actually
-//      refuses the write while the display path runs on the dGPU.
+//  v1.0.5 changes (diagnosed from a G513QR field log):
+//    - A DSTS response of bare 0x00000000 (no status/presence bits) now means
+//      "device ID not implemented by this firmware" instead of "value = 0".
+//      The G513QR has no MUX (0x00090016 answers bare zero); it was being
+//      misread as "MUX present, dGPU-direct", triggering pointless MUX writes
+//      and the restart flow. The apps now skip the MUX entirely on such
+//      machines and do a pure live dGPU power toggle.
+//    - win32err is only logged when a call actually fails (it was stale noise
+//      on successful calls).
 //
-//  v1.0.3 changes:
-//    - Standard <-> Eco applies LIVE, no restart required: the NVIDIA Display
-//      Container service is released before switching to Eco (so the firmware
-//      can cut dGPU power immediately) and restarted after switching back to
-//      Standard (so the GPU returns right away).
-//
-//  v1.0.2 changes:
-//    - Safe two-step flow when a restart is genuinely unavoidable.
-//    - Full diagnostic logging: shown in-app (View log -> Copy) and written
-//      to %LOCALAPPDATA%\GpuModeSwitch\<app>.log.
+//  v1.0.4: live dGPU toggle always attempted first; MUX two-step restart flow
+//          only as fallback. v1.0.3: live Standard<->Eco via NV driver service
+//          release/restart. v1.0.2: diagnostic logging. v1.0.1: direct
+//          \\.\ATKACPI transport.
 //
 //  Transport: direct DeviceIoControl on the ASUS ACPI device \\.\ATKACPI
 //  (control code 0x0022240C, methods DSTS = read / DEVS = write), falling
@@ -51,7 +48,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.4";
+        public const string Version = "1.0.5";
 
         [STAThread]
         private static void Main(string[] args)
@@ -258,8 +255,9 @@ namespace GpuModeSwitch
             int outVal = -1;
             if (ok) outVal = BitConverter.ToInt32(outBuf, 0);
 
-            Logger.Line(string.Format("  ATKACPI {0} dev=0x{1:X8} val={2} -> ok={3} raw=0x{4:X8} (win32err={5})",
-                label, deviceId, value, ok, (long)outVal, err));
+            // GetLastWin32Error is only meaningful when the call failed.
+            Logger.Line(string.Format("  ATKACPI {0} dev=0x{1:X8} val={2} -> ok={3} raw=0x{4:X8}{5}",
+                label, deviceId, value, ok, (long)outVal, ok ? "" : " (win32err=" + err + ")"));
             return outVal;
         }
 
@@ -537,13 +535,23 @@ namespace GpuModeSwitch
         public static bool MuxSupported { get { Probe(); return _muxSupported; } }
         public static string LastError { get { return _lastError; } }
 
-        // DSTS results carry a 0x10000 status bit (and often a 0x01000000
-        // presence bit); some models return the plain value instead.
+        // DSTS responses always carry upper status/presence bits on supported
+        // devices (e.g. 0x00010000). A response of bare 0 with NO upper bits
+        // means the firmware does not implement the device ID at all - it must
+        // not be read as "value = 0" (a supported device at 0 answers
+        // 0x00010000). This mirrors G-Helper, where such a result comes back
+        // negative and the endpoint is treated as unsupported.
         private static int NormalizeState(int raw, string what)
         {
             if (raw < 0)
             {
                 Logger.Line("  normalize " + what + ": raw<0 -> unsupported/failed");
+                return -1;
+            }
+            if ((raw & 0xFFFF0000) == 0)
+            {
+                Logger.Line("  normalize " + what + ": raw=0x" + raw.ToString("X8") +
+                            " -> no status bits, device not implemented");
                 return -1;
             }
             int v = raw - 0x10000;

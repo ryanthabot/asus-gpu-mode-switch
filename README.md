@@ -9,6 +9,16 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.8** — themed UI + confirm mode:
+> - **Apply with confirm** is now the default flow: the app probes first, shows
+>   the detected state, and waits for **Apply**. Run with `--auto` to skip the
+>   confirmation and switch immediately.
+> - Themed borderless window with the app logo, an animated shimmer bar while
+>   probing/applying, and a fade-in. The switch runs on a background thread so
+>   the animation stays smooth.
+> - Go Time icon rebuilt: NVIDIA eye on a gradient tile with truly transparent
+>   rounded corners (no more white corners at any size).
+>
 > **v1.0.7** — the main window and the diagnostic log window now appear on
 > the taskbar (with the app's own NVIDIA-eye / leaf icon), instead of being
 > hidden while the switch runs.
@@ -60,8 +70,9 @@ Grab both executables from the
 
 1. Close games and other apps that are using the dGPU.
 2. Double-click **Go Time.exe** or **Eco Mode.exe**, confirm the UAC prompt.
-3. Done — the switch applies **live, no restart needed** (the app releases/restarts
-   the NVIDIA driver service behind the scenes, which is what makes it instant).
+3. Check the detected state in the window and press **Apply** — the switch
+   happens live, no restart. (Run with `--auto` to skip the Apply step.)
+4. Run the other app whenever you want to switch back.
 
 A restart is only ever needed in one situation: if the firmware refuses the
 switch because the display path is physically running through the dGPU

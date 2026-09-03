@@ -3,10 +3,24 @@
 # (48/32/16 BMP entries downscaled with GDI+ + the original 256 as a PNG entry).
 param(
     [Parameter(Mandatory = $true)][string]$SourcePng,
-    [Parameter(Mandatory = $true)][string]$OutIco
+    [Parameter(Mandatory = $true)][string]$OutIco,
+    [float]$ClipRadiusPx = 0,      # if set, source is clipped to a rounded rect (corners -> transparent)
+    [string]$ClippedPngOut = ""    # optional: also save the clipped 256px image here
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
+
+function RoundRectPath([float]$x, [float]$y, [float]$w, [float]$h, [float]$r)
+{
+    $p = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $d = $r * 2
+    $p.AddArc($x, $y, $d, $d, 180, 90)
+    $p.AddArc($x + $w - $d, $y, $d, $d, 270, 90)
+    $p.AddArc($x + $w - $d, $y + $h - $d, $d, $d, 0, 90)
+    $p.AddArc($x, $y + $h - $d, $d, $d, 90, 90)
+    $p.CloseFigure()
+    return $p
+}
 
 function Encode-BmpEntry([System.Drawing.Bitmap]$bmp)
 {
@@ -86,6 +100,28 @@ function Save-Ico([System.Drawing.Bitmap[]]$bmps, [string]$outPath)
 }
 
 $src = New-Object System.Drawing.Bitmap $SourcePng
+
+if ($ClipRadiusPx -gt 0)
+{
+    # Redraw the square source onto a transparent canvas, clipped to a rounded
+    # rect: corners become truly transparent (fixes white/corner artifacts
+    # from browser screenshots) and matches the rounded-tile look.
+    $clipped = New-Object System.Drawing.Bitmap $src.Width, $src.Height
+    $g2 = [System.Drawing.Graphics]::FromImage($clipped)
+    $g2.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $path = RoundRectPath 0 0 $src.Width $src.Height $ClipRadiusPx
+    $g2.SetClip($path)
+    $g2.DrawImage($src, 0, 0, $src.Width, $src.Height)
+    $g2.Dispose()
+    if ($ClippedPngOut -ne "")
+    {
+        $clipped.Save($ClippedPngOut, [System.Drawing.Imaging.ImageFormat]::Png)
+    }
+    $src.Dispose()
+    $src = $clipped
+}
+
 $all = @()
 foreach ($s in @(16, 32, 48))
 {

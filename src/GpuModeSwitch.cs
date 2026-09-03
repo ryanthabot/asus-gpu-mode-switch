@@ -1,33 +1,25 @@
-//  GpuModeSwitch.cs  (v1.0.7)
+//  GpuModeSwitch.cs  (v1.0.8)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
 //
-//  v1.0.7 changes:
-//    - The main window and the diagnostic log window now appear on the
-//      taskbar (they were deliberately hidden before), and both carry the
-//      app's own icon on their title bar / taskbar button.
+//  v1.0.8 changes:
+//    - Themed UI: borderless rounded dark window with the app logo, an
+//      animated shimmer bar while probing/applying, and a fade-in. The whole
+//      window is draggable. The switch runs on a background thread so the
+//      animation stays smooth.
+//    - "Apply with confirm" flow: after probing, the app shows the detected
+//      state and waits for Apply. Run with --auto to switch without
+//      confirmation.
+//    - Go Time icon rebuilt: NVIDIA eye on a gradient tile with truly
+//      transparent rounded corners (no more white corners at any size).
 //
-//  v1.0.6 changes:
-//    - Application icons: "Go Time" carries the NVIDIA eye on a dark tile,
-//      "Eco Mode" a white leaf on green. Both embedded as multi-size .ico
-//      (16/32/48/256) via /win32icon. No behavior changes.
-//
-//  v1.0.5 changes (diagnosed from a G513QR field log):
-//    - A DSTS response of bare 0x00000000 (no status/presence bits) now means
-//      "device ID not implemented by this firmware" instead of "value = 0".
-//      The G513QR has no MUX (0x00090016 answers bare zero); it was being
-//      misread as "MUX present, dGPU-direct", triggering pointless MUX writes
-//      and the restart flow. The apps now skip the MUX entirely on such
-//      machines and do a pure live dGPU power toggle.
-//    - win32err is only logged when a call actually fails (it was stale noise
-//      on successful calls).
-//
-//  v1.0.4: live dGPU toggle always attempted first; MUX two-step restart flow
-//          only as fallback. v1.0.3: live Standard<->Eco via NV driver service
-//          release/restart. v1.0.2: diagnostic logging. v1.0.1: direct
-//          \\.\ATKACPI transport.
+//  v1.0.7: main + log windows appear on the taskbar with the app icon.
+//  v1.0.6: application icons. v1.0.5: bare-zero DSTS = device not implemented.
+//  v1.0.4: live toggle always first. v1.0.3: live switching via NV driver
+//  service release/restart. v1.0.2: diagnostic logging. v1.0.1: direct
+//  \\.\ATKACPI transport.
 //
 //  Transport: direct DeviceIoControl on the ASUS ACPI device \\.\ATKACPI
 //  (control code 0x0022240C, methods DSTS = read / DEVS = write), falling
@@ -46,6 +38,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Management;
 using System.Runtime.InteropServices;
@@ -58,7 +51,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.7";
+        public const string Version = "1.0.8";
 
         [STAThread]
         private static void Main(string[] args)
@@ -69,8 +62,16 @@ namespace GpuModeSwitch
             Logger.Init("Go Time", "GoTime");
 #endif
 
-            bool statusOnly = args != null && args.Length > 0 &&
-                string.Equals(args[0], "--status", StringComparison.OrdinalIgnoreCase);
+            bool auto = false;
+            bool statusOnly = false;
+            if (args != null)
+            {
+                foreach (string a in args)
+                {
+                    if (string.Equals(a, "--auto", StringComparison.OrdinalIgnoreCase)) auto = true;
+                    if (string.Equals(a, "--status", StringComparison.OrdinalIgnoreCase)) statusOnly = true;
+                }
+            }
 
             if (statusOnly)
             {
@@ -86,7 +87,7 @@ namespace GpuModeSwitch
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+            Application.Run(new MainForm(auto));
         }
     }
 
@@ -431,99 +432,6 @@ namespace GpuModeSwitch
     }
 
     // ---------------------------------------------------------------------
-    // NVIDIA Display Container service control. Releasing this service lets
-    // the firmware actually cut dGPU power when switching to Eco (the driver
-    // otherwise holds the device), and restarting it after switching to
-    // Standard makes the dGPU come back without a reboot. Same as G-Helper.
-    // All of this is best-effort and logged; failures never abort the switch.
-    // ---------------------------------------------------------------------
-    internal static class GpuServices
-    {
-        private static string[] FindNvServices()
-        {
-            List<string> found = new List<string>();
-            try
-            {
-                ServiceController[] all = ServiceController.GetServices();
-                foreach (ServiceController s in all)
-                {
-                    if (s.ServiceName != null &&
-                        s.ServiceName.StartsWith("NVDisplay.Container", StringComparison.OrdinalIgnoreCase))
-                        found.Add(s.ServiceName);
-                    s.Dispose();
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Line("NV service lookup failed: " + ex.Message);
-            }
-            if (found.Count == 0)
-                Logger.Line("No NVIDIA Display Container services found (AMD-only system or driver absent).");
-            return found.ToArray();
-        }
-
-        // Used before switching to Eco: release the driver so power can be cut.
-        public static void StopAll()
-        {
-            string[] names = FindNvServices();
-            foreach (string n in names)
-            {
-                try
-                {
-                    using (ServiceController sc = new ServiceController(n))
-                    {
-                        if (sc.Status == ServiceControllerStatus.Running ||
-                            sc.Status == ServiceControllerStatus.StartPending)
-                        {
-                            sc.Stop();
-                            sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
-                            Logger.Line("NV service stopped: " + n);
-                        }
-                        else
-                        {
-                            Logger.Line("NV service already " + sc.Status + ": " + n);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.Line("NV service stop failed (" + n + "): " + ex.Message);
-                }
-            }
-        }
-
-        // Used after switching to Standard: (re)start the driver service so the
-        // dGPU is usable immediately.
-        public static void RestartAll()
-        {
-            string[] names = FindNvServices();
-            foreach (string n in names)
-            {
-                try
-                {
-                    using (ServiceController sc = new ServiceController(n))
-                    {
-                        if (sc.Status == ServiceControllerStatus.Running ||
-                            sc.Status == ServiceControllerStatus.StartPending)
-                        {
-                            sc.Stop();
-                            sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
-                            Logger.Line("NV service stopped for restart: " + n);
-                        }
-                        sc.Start();
-                        sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
-                        Logger.Line("NV service running: " + n);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.Line("NV service restart failed (" + n + "): " + ex.Message);
-                }
-            }
-        }
-    }
-
-    // ---------------------------------------------------------------------
     // High-level control: picks a working transport + device IDs, then
     // switches the GPU mode with logging and read-back verification.
     // ---------------------------------------------------------------------
@@ -638,6 +546,34 @@ namespace GpuModeSwitch
         {
             if (!MuxSupported) return -1;
             return NormalizeState(_transport.ReadRaw(_muxId), "MUX read");
+        }
+
+        // Read-only probe used by the confirm phase: reports the current state
+        // without changing anything.
+        public static string Precheck(bool eco, out bool ok)
+        {
+            if (!Available)
+            {
+                ok = false;
+                return _lastError;
+            }
+            ok = true;
+
+            int gpu = GetDgpuState();
+            string s = "Current state: dGPU " +
+                (gpu == 0 ? "on" : gpu == 1 ? "off (eco)" : "unknown");
+            if (MuxSupported)
+            {
+                int mux = GetMuxState();
+                s += ", MUX " + (mux == 1 ? "hybrid" : mux == 0 ? "dGPU-direct" : "unknown");
+            }
+            s += ".\nTarget: " + (eco ? "Eco Mode (dGPU off)" : "Standard mode (dGPU on)") + ".";
+            if (gpu == (eco ? 1 : 0))
+            {
+                s += "\nAlready in the target mode - Apply will simply confirm it.";
+            }
+            Logger.Line("Precheck done: " + s.Replace("\n", " | "));
+            return s;
         }
 
         public static SwitchOutcome SwitchTo(bool eco)
@@ -803,6 +739,99 @@ namespace GpuModeSwitch
         }
     }
 
+    // ---------------------------------------------------------------------
+    // NVIDIA Display Container service control. Releasing this service lets
+    // the firmware actually cut dGPU power when switching to Eco (the driver
+    // otherwise holds the device), and restarting it after switching to
+    // Standard makes the dGPU come back without a reboot. Same as G-Helper.
+    // All of this is best-effort and logged; failures never abort the switch.
+    // ---------------------------------------------------------------------
+    internal static class GpuServices
+    {
+        private static string[] FindNvServices()
+        {
+            List<string> found = new List<string>();
+            try
+            {
+                ServiceController[] all = ServiceController.GetServices();
+                foreach (ServiceController s in all)
+                {
+                    if (s.ServiceName != null &&
+                        s.ServiceName.StartsWith("NVDisplay.Container", StringComparison.OrdinalIgnoreCase))
+                        found.Add(s.ServiceName);
+                    s.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Line("NV service lookup failed: " + ex.Message);
+            }
+            if (found.Count == 0)
+                Logger.Line("No NVIDIA Display Container services found (AMD-only system or driver absent).");
+            return found.ToArray();
+        }
+
+        // Used before switching to Eco: release the driver so power can be cut.
+        public static void StopAll()
+        {
+            string[] names = FindNvServices();
+            foreach (string n in names)
+            {
+                try
+                {
+                    using (ServiceController sc = new ServiceController(n))
+                    {
+                        if (sc.Status == ServiceControllerStatus.Running ||
+                            sc.Status == ServiceControllerStatus.StartPending)
+                        {
+                            sc.Stop();
+                            sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
+                            Logger.Line("NV service stopped: " + n);
+                        }
+                        else
+                        {
+                            Logger.Line("NV service already " + sc.Status + ": " + n);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Line("NV service stop failed (" + n + "): " + ex.Message);
+                }
+            }
+        }
+
+        // Used after switching to Standard: (re)start the driver service so the
+        // dGPU is usable immediately.
+        public static void RestartAll()
+        {
+            string[] names = FindNvServices();
+            foreach (string n in names)
+            {
+                try
+                {
+                    using (ServiceController sc = new ServiceController(n))
+                    {
+                        if (sc.Status == ServiceControllerStatus.Running ||
+                            sc.Status == ServiceControllerStatus.StartPending)
+                        {
+                            sc.Stop();
+                            sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
+                            Logger.Line("NV service stopped for restart: " + n);
+                        }
+                        sc.Start();
+                        sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
+                        Logger.Line("NV service running: " + n);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Line("NV service restart failed (" + n + "): " + ex.Message);
+                }
+            }
+        }
+    }
+
     // Gives a form the executable's own icon (title bar / taskbar button).
     internal static class WindowIcons
     {
@@ -815,6 +844,94 @@ namespace GpuModeSwitch
             catch
             {
                 // exe icon unavailable for some reason - the generic one is fine
+            }
+        }
+    }
+
+    // Small shared drawing helpers.
+    internal static class UiShapes
+    {
+        public static GraphicsPath RoundRect(float x, float y, float w, float h, float r)
+        {
+            GraphicsPath p = new GraphicsPath();
+            float d = r * 2;
+            p.AddArc(x, y, d, d, 180, 90);
+            p.AddArc(x + w - d, y, d, d, 270, 90);
+            p.AddArc(x + w - d, y + h - d, d, d, 0, 90);
+            p.AddArc(x, y + h - d, d, d, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
+    }
+
+    // Indeterminate shimmer progress bar (themed, animated via Advance()).
+    internal class ShimmerBar : Control
+    {
+        private float _pos = -0.35f;
+        private bool _active;
+
+        public ShimmerBar()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.UserPaint |
+                     ControlStyles.ResizeRedraw, true);
+            Height = 8;
+            TabStop = false;
+        }
+
+        public Color Accent { get; set; }
+
+        public bool Active
+        {
+            get { return _active; }
+            set
+            {
+                if (_active != value)
+                {
+                    _active = value;
+                    if (value) _pos = -0.35f;
+                    Invalidate();
+                }
+            }
+        }
+
+        public void Advance()
+        {
+            if (!_active) return;
+            _pos += 0.03f;
+            if (_pos > 1.35f) _pos = -0.35f;
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            using (GraphicsPath track = UiShapes.RoundRect(0, 0, Width, Height, 4))
+            {
+                using (SolidBrush bg = new SolidBrush(Color.FromArgb(40, 40, 47)))
+                {
+                    g.FillPath(bg, track);
+                }
+
+                if (_active)
+                {
+                    GraphicsState saved = g.Save();
+                    g.SetClip(track);
+                    float w = Math.Max(70, Width * 0.30f);
+                    float x = _pos * Width - w / 2;
+                    RectangleF seg = new RectangleF(x, -2, w, Height + 4);
+                    using (LinearGradientBrush lgb = new LinearGradientBrush(
+                        new RectangleF(x, -2, Math.Max(w, 1), Height + 4),
+                        Color.FromArgb(0, Accent), Color.FromArgb(230, Accent), 0f))
+                    {
+                        lgb.SetBlendTriangularShape(0.5f, 1f);
+                        g.FillRectangle(lgb, seg);
+                    }
+                    g.Restore(saved);
+                }
             }
         }
     }
@@ -897,15 +1014,32 @@ namespace GpuModeSwitch
         }
     }
 
+    internal enum UiPhase
+    {
+        Probe,      // contacting hardware, shimmer on
+        Confirm,    // waiting for the user to press Apply
+        Applying,   // switch running on the background thread
+        Result      // done or failed
+    }
+
     internal class MainForm : Form
     {
+        private readonly PictureBox _logo = new PictureBox();
         private readonly Label _title = new Label();
         private readonly Label _subtitle = new Label();
         private readonly Label _status = new Label();
         private readonly Label _detail = new Label();
+        private readonly ShimmerBar _bar = new ShimmerBar();
+        private readonly Button _apply = new Button();
+        private readonly Button _cancel = new Button();
         private readonly Button _restart = new Button();
+        private readonly Button _logBtn = new Button();
         private readonly Button _close = new Button();
-        private readonly Button _log = new Button();
+        private readonly Button _x = new Button();
+        private readonly System.Windows.Forms.Timer _clock = new System.Windows.Forms.Timer();
+        private readonly bool _autoMode;
+        private UiPhase _phase = UiPhase.Probe;
+        private SwitchOutcome _last;
 
 #if MODE_ECO
         private const bool TargetEco = true;
@@ -919,116 +1053,310 @@ namespace GpuModeSwitch
         private readonly Color _accent = Color.FromArgb(255, 70, 85);
 #endif
 
-        public MainForm()
+        public MainForm(bool autoMode)
         {
+            _autoMode = autoMode;
+
             Text = TargetEco ? "Eco Mode" : "Go Time";
-            FormBorderStyle = FormBorderStyle.FixedDialog;
+            FormBorderStyle = FormBorderStyle.None;
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = true;
-            WindowIcons.Apply(this);
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(480, 262);
-            BackColor = Color.FromArgb(24, 24, 28);
+            ClientSize = new Size(470, 312);
+            BackColor = Color.FromArgb(22, 22, 26);
             Font = new Font("Segoe UI", 9.5f);
+            Opacity = 0;
+            WindowIcons.Apply(this);
+
+            Bitmap logo = LoadLogo();
+            if (logo != null)
+            {
+                _logo.Image = logo;
+                _logo.SizeMode = PictureBoxSizeMode.Zoom;
+                _logo.Location = new Point(24, 18);
+                _logo.Size = new Size(56, 56);
+                _logo.TabStop = false;
+                Controls.Add(_logo);
+            }
 
             _title.Text = Title;
-            _title.Font = new Font("Segoe UI", 19f, FontStyle.Bold);
+            _title.Font = new Font("Segoe UI", 16f, FontStyle.Bold);
             _title.ForeColor = _accent;
             _title.AutoSize = true;
-            _title.Location = new Point(24, 18);
+            _title.Location = new Point(94, logo != null ? 24 : 24);
             _title.BackColor = Color.Transparent;
 
             _subtitle.Text = Subtitle + "   v" + Program.Version;
             _subtitle.ForeColor = Color.FromArgb(150, 150, 158);
             _subtitle.AutoSize = true;
-            _subtitle.Location = new Point(26, 64);
+            _subtitle.Location = new Point(96, logo != null ? 56 : 56);
             _subtitle.BackColor = Color.Transparent;
 
-            _status.Text = "Switching GPU mode...";
+            _x.Text = "X";
+            _x.FlatStyle = FlatStyle.Flat;
+            _x.FlatAppearance.BorderSize = 0;
+            _x.ForeColor = Color.FromArgb(140, 140, 148);
+            _x.BackColor = Color.FromArgb(22, 22, 26);
+            _x.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
+            _x.Size = new Size(32, 26);
+            _x.Location = new Point(ClientSize.Width - 42, 10);
+            _x.TabStop = false;
+            _x.Click += delegate
+            {
+                if (_phase == UiPhase.Applying) return;   // never abandon a mid-flight write
+                Close();
+            };
+
+            _bar.Accent = _accent;
+            _bar.Location = new Point(24, 92);
+            _bar.Size = new Size(ClientSize.Width - 48, 8);
+
+            _status.Text = "Starting...";
             _status.ForeColor = Color.FromArgb(235, 235, 240);
             _status.Font = new Font("Segoe UI", 11.5f, FontStyle.Bold);
             _status.AutoSize = false;
-            _status.Size = new Size(432, 28);
-            _status.Location = new Point(24, 110);
+            _status.Size = new Size(ClientSize.Width - 48, 28);
+            _status.Location = new Point(24, 118);
             _status.BackColor = Color.Transparent;
 
             _detail.ForeColor = Color.FromArgb(165, 165, 172);
             _detail.AutoSize = false;
-            _detail.Size = new Size(432, 86);
-            _detail.Location = new Point(24, 140);
+            _detail.Size = new Size(ClientSize.Width - 48, 100);
+            _detail.Location = new Point(24, 148);
             _detail.BackColor = Color.Transparent;
 
-            _restart.Text = "Restart now";
-            _restart.FlatStyle = FlatStyle.Flat;
-            _restart.FlatAppearance.BorderColor = _accent;
-            _restart.FlatAppearance.BorderSize = 1;
-            _restart.ForeColor = Color.White;
-            _restart.BackColor = Color.FromArgb(45, 45, 52);
-            _restart.Size = new Size(120, 32);
-            _restart.Location = new Point(336, 216);
+            InitButton(_apply, "Apply", 150, 24, 36);
+            _apply.BackColor = _accent;
+            _apply.ForeColor = Color.White;
+            _apply.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
+            _apply.FlatAppearance.BorderSize = 0;
+            _apply.Click += delegate { BeginApply(); };
+
+            InitButton(_cancel, "Cancel", 90, 182, 36);
+            _cancel.Click += delegate { Close(); };
+
+            InitButton(_restart, "Restart now", 120, 24, 36);
             _restart.Visible = false;
+            _restart.FlatAppearance.BorderColor = _accent;
             _restart.Click += OnRestart;
 
-            _close.Text = "Close";
-            _close.FlatStyle = FlatStyle.Flat;
-            _close.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
-            _close.ForeColor = Color.FromArgb(210, 210, 216);
-            _close.BackColor = Color.FromArgb(45, 45, 52);
-            _close.Size = new Size(80, 32);
-            _close.Location = new Point(248, 216);
-            _close.Click += delegate { Close(); };
-
-            _log.Text = "View log";
-            _log.FlatStyle = FlatStyle.Flat;
-            _log.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
-            _log.ForeColor = Color.FromArgb(210, 210, 216);
-            _log.BackColor = Color.FromArgb(45, 45, 52);
-            _log.Size = new Size(100, 32);
-            _log.Location = new Point(140, 216);
-            _log.Click += delegate
+            InitButton(_logBtn, "View log", 90, 152, 36);
+            _logBtn.Visible = false;
+            _logBtn.Click += delegate
             {
                 using (LogForm lf = new LogForm(TargetEco ? "Eco Mode" : "Go Time")) lf.ShowDialog(this);
             };
 
-            Controls.Add(_title);
-            Controls.Add(_subtitle);
-            Controls.Add(_status);
-            Controls.Add(_detail);
-            Controls.Add(_restart);
-            Controls.Add(_close);
-            Controls.Add(_log);
+            InitButton(_close, "Close", 80, 250, 36);
+            _close.Visible = false;
+            _close.Click += delegate { Close(); };
 
-            TryDarkTitleBar();
-            Shown += delegate { OnRun(); };
-            FormClosed += delegate { AsusControl.Shutdown(); };
+            Controls.AddRange(new Control[]
+            {
+                _title, _subtitle, _x, _bar, _status, _detail,
+                _apply, _cancel, _restart, _logBtn, _close
+            });
+
+            Shown += delegate
+            {
+                EnterProbe();
+            };
+
+            _clock.Interval = 30;
+            _clock.Tick += OnClock;
+            _clock.Start();
+
+            FormClosed += delegate
+            {
+                _clock.Dispose();
+                AsusControl.Shutdown();
+            };
         }
 
-        private void OnRun()
+        private void InitButton(Button b, string text, int width, int x, int height)
         {
-            Refresh();
-            Thread.Sleep(250);   // let the "switching" state be readable; the switch itself is fast
+            b.Text = text;
+            b.FlatStyle = FlatStyle.Flat;
+            b.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
+            b.ForeColor = Color.FromArgb(220, 220, 226);
+            b.BackColor = Color.FromArgb(42, 42, 49);
+            b.Size = new Size(width, height);
+            b.Location = new Point(x, ClientSize.Height - height - 18);
+            b.TabStop = false;
+            b.Visible = false;
+        }
 
-            SwitchOutcome r;
+        // The exe's 256px icon artwork is embedded per-build as resource
+        // "GpuModeSwitch.appicon.png" (see build.cmd).
+        private static Bitmap LoadLogo()
+        {
             try
             {
-                r = AsusControl.SwitchTo(TargetEco);
+                Stream s = typeof(Program).Assembly.GetManifestResourceStream("GpuModeSwitch.appicon.png");
+                if (s == null) return null;
+                using (Bitmap tmp = new Bitmap(s))
+                {
+                    return new Bitmap(tmp);   // detached copy; the stream can go away
+                }
             }
-            catch (Exception ex)
+            catch
             {
-                Logger.Line("UNEXPECTED ERROR: " + ex.GetType().Name + ": " + ex.Message + "\r\n" + ex.StackTrace);
-                r = new SwitchOutcome();
-                r.Headline = "Unexpected error";
-                r.Detail = ex.Message + "\n\nFull details: View log.";
+                return null;
             }
+        }
 
-            _status.Text = (r.Ok ? "OK - " : "Failed - ") + r.Headline;
-            _status.ForeColor = r.Ok ? _accent : Color.FromArgb(255, 120, 120);
-            _detail.Text = r.Detail;
-            _restart.Visible = r.Ok && r.NeedsRestart;
-            _log.FlatAppearance.BorderColor = r.Ok
-                ? Color.FromArgb(90, 90, 98)
-                : _accent;   // highlight the log button when something went wrong
+        private void OnClock(object sender, EventArgs e)
+        {
+            if (Opacity < 1) Opacity = Math.Min(1, Opacity + 0.07);
+            _bar.Advance();
+        }
+
+        // Borderless window: let any bare form area drag the window.
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_NCHITTEST = 0x84;
+            const int HTCLIENT = 1;
+            const int HTCAPTION = 2;
+            if (m.Msg == WM_NCHITTEST)
+            {
+                base.WndProc(ref m);
+                if ((int)m.Result == HTCLIENT) m.Result = (IntPtr)HTCAPTION;
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        // ---- phase helpers -------------------------------------------------
+
+        private void HideAllButtons()
+        {
+            _apply.Visible = _cancel.Visible = _restart.Visible = false;
+            _logBtn.Visible = _close.Visible = false;
+        }
+
+        private void EnterProbe()
+        {
+            _phase = UiPhase.Probe;
+            HideAllButtons();
+            _bar.Active = true;
+            _bar.Visible = true;
+            _status.ForeColor = Color.FromArgb(235, 235, 240);
+            _status.Text = "Contacting ASUS hardware...";
+            _detail.Text = "";
+            Logger.Line("UI: probing");
+
+            RunBg(delegate
+            {
+                bool ok;
+                string msg = AsusControl.Precheck(TargetEco, out ok);
+                SafeInvoke(delegate
+                {
+                    if (!ok)
+                    {
+                        EnterResult(false, "ASUS hardware interface not found", msg);
+                        return;
+                    }
+                    if (_autoMode)
+                    {
+                        Logger.Line("UI: --auto given, applying without confirm");
+                        BeginApply();
+                        return;
+                    }
+                    EnterConfirm(msg);
+                });
+            });
+        }
+
+        private void EnterConfirm(string precheckText)
+        {
+            _phase = UiPhase.Confirm;
+            _bar.Active = false;
+            HideAllButtons();
+            _apply.Visible = true;
+            _cancel.Visible = true;
+            _status.ForeColor = Color.FromArgb(235, 235, 240);
+            _status.Text = "Ready to apply " + (TargetEco ? "Eco Mode" : "Standard mode");
+            _detail.Text = precheckText + "\n\n" +
+                "Switching applies immediately and is reversible -\n" +
+                "run the other app to switch back.";
+            Logger.Line("UI: waiting for Apply");
+        }
+
+        private void BeginApply()
+        {
+            if (_phase != UiPhase.Confirm && _phase != UiPhase.Probe) return;
+            _phase = UiPhase.Applying;
+            HideAllButtons();
+            _bar.Active = true;
+            _bar.Visible = true;
+            _status.ForeColor = Color.FromArgb(235, 235, 240);
+            _status.Text = "Applying " + (TargetEco ? "Eco Mode" : "Standard mode") + "...";
+            _detail.Text = "";
+            Logger.Line("UI: applying");
+
+            RunBg(delegate
+            {
+                SwitchOutcome r;
+                try
+                {
+                    r = AsusControl.SwitchTo(TargetEco);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Line("UNEXPECTED ERROR: " + ex.GetType().Name + ": " + ex.Message + "\r\n" + ex.StackTrace);
+                    r = new SwitchOutcome();
+                    r.Headline = "Unexpected error";
+                    r.Detail = ex.Message + "\n\nFull details: View log.";
+                }
+                SafeInvoke(delegate { EnterResult(r.Ok, r.Headline, r.Detail, r); });
+            });
+        }
+
+        private void EnterResult(bool ok, string headline, string detail)
+        {
+            EnterResult(ok, headline, detail, null);
+        }
+
+        private void EnterResult(bool ok, string headline, string detail, SwitchOutcome r)
+        {
+            _phase = UiPhase.Result;
+            _last = r;
+            HideAllButtons();
+            _bar.Active = false;
+            _bar.Visible = false;
+            _status.Text = (ok ? "OK - " : "Failed - ") + headline;
+            _status.ForeColor = ok ? _accent : Color.FromArgb(255, 120, 120);
+            _detail.Text = detail;
+            _logBtn.Visible = true;
+            _logBtn.FlatAppearance.BorderColor = ok ? Color.FromArgb(90, 90, 98) : _accent;
+            _close.Visible = true;
+            if (r != null && r.Ok && r.NeedsRestart) _restart.Visible = true;
+        }
+
+        // ---- plumbing ------------------------------------------------------
+
+        private void RunBg(ThreadStart work)
+        {
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                try { work(); }
+                catch (Exception ex)
+                {
+                    Logger.Line("BACKGROUND ERROR: " + ex.GetType().Name + ": " + ex.Message);
+                    SafeInvoke(delegate
+                    {
+                        EnterResult(false, "Unexpected error",
+                            ex.Message + "\n\nFull details: View log.");
+                    });
+                }
+            });
+        }
+
+        private void SafeInvoke(MethodInvoker mi)
+        {
+            try { Invoke(mi); }
+            catch { }   // form gone while a background step finished - nothing to do
         }
 
         private void OnRestart(object sender, EventArgs e)

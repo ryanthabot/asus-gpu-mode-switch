@@ -1,26 +1,26 @@
-//  GpuModeSwitch.cs  (v1.0.3)
+//  GpuModeSwitch.cs  (v1.0.4)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
 //
+//  v1.0.4 changes:
+//    - The live dGPU power toggle is now ALWAYS attempted first, exactly like
+//      Armoury Crate - even when the MUX register reads dGPU-direct (which
+//      happens transiently on dynamic-switch machines). The MUX two-step
+//      restart flow is only a fallback, used when the firmware actually
+//      refuses the write while the display path runs on the dGPU.
+//
 //  v1.0.3 changes:
-//    - Standard <-> Eco now applies LIVE, no restart required - like Armoury
-//      Crate. Before switching to Eco, the NVIDIA Display Container service
-//      is stopped so the firmware can cut dGPU power immediately; after
-//      switching back to Standard the service is restarted so the dGPU comes
-//      back right away (same choreography as G-Helper). A restart remains
-//      only an optional finalizer, and is still genuinely required when
-//      leaving dGPU-direct (Ultimate) display mode.
+//    - Standard <-> Eco applies LIVE, no restart required: the NVIDIA Display
+//      Container service is released before switching to Eco (so the firmware
+//      can cut dGPU power immediately) and restarted after switching back to
+//      Standard (so the GPU returns right away).
 //
 //  v1.0.2 changes:
-//    - Leaving dGPU-direct (Ultimate) display mode is now a two-step flow,
-//      matching G-Helper/Armoury Crate: move the MUX to hybrid first (the
-//      change lands at restart), then apply the dGPU power flag on the next
-//      run. A refused MUX write is no longer a fatal error.
+//    - Safe two-step flow when a restart is genuinely unavoidable.
 //    - Full diagnostic logging: shown in-app (View log -> Copy) and written
-//      to %LOCALAPPDATA%\GpuModeSwitch\<app>.log. Raw hex of every DSTS read
-//      and DEVS write is recorded so failures can be reported remotely.
+//      to %LOCALAPPDATA%\GpuModeSwitch\<app>.log.
 //
 //  Transport: direct DeviceIoControl on the ASUS ACPI device \\.\ATKACPI
 //  (control code 0x0022240C, methods DSTS = read / DEVS = write), falling
@@ -51,7 +51,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.3";
+        public const string Version = "1.0.4";
 
         [STAThread]
         private static void Main(string[] args)
@@ -638,69 +638,71 @@ namespace GpuModeSwitch
             int muxBefore = MuxSupported ? GetMuxState() : -1;
             Logger.Line(string.Format("State before switch: dGPU={0} (0=on 1=off) MUX={1} (0=dGPU-direct 1=hybrid)", gpuBefore, muxBefore));
 
-            // Leaving dGPU-direct (Ultimate) display mode. The MUX change only
-            // lands at restart, so - like G-Helper - we write it (result is
-            // advisory only), have the user restart, and apply the dGPU power
-            // flag on the next run. A refused MUX write is NOT fatal here.
-            if (MuxSupported && muxBefore == 0)
+            // Live toggle first - this is what Armoury Crate does: just flip
+            // the dGPU power flag and let the driver follow. The MUX/display
+            // path is only touched as a fallback, if the firmware refuses the
+            // write while the display actually runs on the dGPU.
+            int want = eco ? 1 : 0;
+            if (gpuBefore == want)
             {
-                bool muxWrite = _transport.Write(_muxId, 1);
-                Logger.Line("MUX -> hybrid write result: " + muxWrite + " (continuing; applies at restart)");
-
                 o.Ok = true;
-                o.Changed = true;
-                o.NeedsRestart = true;
-                o.RunAgainAfterRestart = true;
-                o.Headline = "Step 1 of 2 done - restart, then run this app again";
-                o.Detail = "The laptop is in dGPU-direct (Ultimate) display mode.\n" +
-                           "The MUX has been switched back to hybrid; this takes\n" +
-                           "effect at the next restart, so the dGPU power flag is\n" +
-                           "applied in a second step after the restart.\n\n" +
-                           "Restart now, then run " + (eco ? "Eco Mode" : "Go Time") + " once more to finish.";
+                o.Changed = false;
+                o.Headline = eco ? "Already in Eco Mode" : "Already in Standard mode";
+                o.Detail = "Nothing needed changing.\nCurrent state: dGPU " + (eco ? "off" : "on") + ", hybrid display path.";
+                Logger.Line("No change needed - already in target mode.");
                 return o;
             }
 
-            int want = eco ? 1 : 0;
-            if (gpuBefore != want)
+            if (eco)
             {
-                if (eco)
+                // Release the NVIDIA driver first so the firmware can
+                // actually cut power when the flag is written (G-Helper
+                // order: stop service, then write the eco flag).
+                Logger.Line("Releasing NVIDIA driver service before the eco write...");
+                GpuServices.StopAll();
+            }
+
+            Logger.Line("Writing dGPU power flag: " + want);
+            bool written = _transport.Write(_dgpuId, (uint)want);
+
+            if (!written && eco)
+            {
+                // The firmware can refuse while the GPU is busy; the
+                // service is released now, so retry once.
+                Logger.Line("dGPU write refused - retrying once after NV service release");
+                GpuServices.StopAll();
+                written = _transport.Write(_dgpuId, (uint)want);
+                if (written) Logger.Line("dGPU write accepted on retry.");
+            }
+
+            if (!written)
+            {
+                Logger.Line("dGPU write refused by firmware.");
+
+                // One case genuinely needs a restart: the display path itself
+                // runs through the dGPU (Ultimate / hard MUX mode). Move the
+                // MUX to hybrid (lands at restart); the flag applies next run.
+                if (MuxSupported && muxBefore == 0)
                 {
-                    // Release the NVIDIA driver first so the firmware can
-                    // actually cut power when the flag is written (G-Helper
-                    // order: stop service, then write the eco flag).
-                    Logger.Line("Releasing NVIDIA driver service before the eco write...");
-                    GpuServices.StopAll();
+                    bool muxWrite = _transport.Write(_muxId, 1);
+                    Logger.Line("MUX -> hybrid write result: " + muxWrite + " (applies at restart)");
+
+                    o.Ok = true;
+                    o.Changed = true;
+                    o.NeedsRestart = true;
+                    o.RunAgainAfterRestart = true;
+                    o.Headline = "One-time restart needed (display path is on the dGPU)";
+                    o.Detail = "The dGPU power flag can't be applied while the display\n" +
+                               "path runs through the dGPU. The MUX has been switched\n" +
+                               "back to hybrid - that takes effect at the next restart.\n\n" +
+                               "Restart now, then run " + (eco ? "Eco Mode" : "Go Time") + " once more.\n" +
+                               "After that one-time restart, switching is instant.";
+                    return o;
                 }
 
-                Logger.Line("Writing dGPU power flag: " + want);
-                if (!_transport.Write(_dgpuId, (uint)want))
-                {
-                    if (eco)
-                    {
-                        // The firmware can refuse while the GPU is busy; the
-                        // service is released now, so retry once.
-                        Logger.Line("dGPU write refused - retrying once after NV service release");
-                        GpuServices.StopAll();
-                        if (_transport.Write(_dgpuId, (uint)want))
-                        {
-                            Logger.Line("dGPU write accepted on retry.");
-                        }
-                        else
-                        {
-                            o.Headline = "The dGPU power change was refused";
-                            o.Detail = "Something is still using the dGPU. Close games and 3D apps,\nthen run this again.\n\nFull details: View log.";
-                            Logger.Line("dGPU write refused by firmware (after retry).");
-                            return o;
-                        }
-                    }
-                    else
-                    {
-                        o.Headline = "The dGPU power change was refused";
-                        o.Detail = "The firmware refused the change. Restart the laptop and try again.\n\nFull details: View log.";
-                        Logger.Line("dGPU write refused by firmware.");
-                        return o;
-                    }
-                }
+                o.Headline = "The dGPU power change was refused";
+                o.Detail = "Something is still using the dGPU. Close games and 3D apps,\nthen run this again.\n\nFull details: View log.";
+                return o;
             }
 
             int gpuAfter = GetDgpuState();
@@ -724,19 +726,10 @@ namespace GpuModeSwitch
                 GpuServices.RestartAll();
             }
 
-            o.Ok = true;
-            o.Changed = gpuBefore != want;
-
-            if (!o.Changed)
-            {
-                o.Headline = eco ? "Already in Eco Mode" : "Already in Standard mode";
-                o.Detail = "Nothing needed changing.\nCurrent state: dGPU " + (eco ? "off" : "on") + ", hybrid display path.";
-                Logger.Line("No change needed - already in target mode.");
-                return o;
-            }
-
             // The flag is written and verified - applied live, no restart needed
             // (a restart only finalizes if something is holding the GPU).
+            o.Ok = true;
+            o.Changed = true;
             o.NeedsRestart = false;
             o.Headline = eco ? "Eco Mode applied" : "Standard mode applied";
             o.Detail = eco

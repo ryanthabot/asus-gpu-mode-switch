@@ -9,14 +9,18 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
-> **v1.0.3** — Standard ↔ Eco now applies **live, without a restart** — like
-> Armoury Crate. The NVIDIA Display Container driver service is released
-> before switching to Eco (so the firmware can cut dGPU power immediately)
-> and restarted after switching back to Standard (so the GPU returns right
-> away). A restart is now only needed when leaving **dGPU-direct (Ultimate)**
-> display mode, which is a physical display-path switch.
+> **v1.0.4** — the live switch is now **always attempted first**, exactly like
+> Armoury Crate: just flip the dGPU power flag, no restart. The MUX/one-time
+> restart flow was demoted to a fallback that only kicks in if the firmware
+> itself refuses the write while the display path is physically running on
+> the dGPU.
 >
-> **v1.0.2** — safe two-step Ultimate exit + full diagnostic logging
+> **v1.0.3** — Standard ↔ Eco applies **live, without a restart**: the NVIDIA
+> Display Container driver service is released before switching to Eco (so the
+> firmware can cut dGPU power immediately) and restarted after switching back
+> to Standard (so the GPU returns right away).
+>
+> **v1.0.2** — safe two-step fallback + full diagnostic logging
 > (*View log → Copy log*, plus `%LOCALAPPDATA%\GpuModeSwitch\`).
 >
 > **v1.0.1** — switched from the `ASUS_WMI` WMI class to the direct ACPI device
@@ -45,10 +49,10 @@ Grab both executables from the
 3. Done — the switch applies **live, no restart needed** (the app releases/restarts
    the NVIDIA driver service behind the scenes, which is what makes it instant).
 
-A restart is only needed in one case: if the laptop is in **dGPU-direct
-(Ultimate)** display mode, the app will say *"Step 1 of 2 done"* — that display
-path is a physical switch that lands at reboot. Restart, then run the same app
-once more to apply the dGPU power flag.
+A restart is only ever needed in one situation: if the firmware refuses the
+switch because the display path is physically running through the dGPU
+(Ultimate mode). The app detects that, moves the MUX back to hybrid, and asks
+for **one** restart — after that, switching is instant every time.
 
 **When something goes wrong:** click **View log** in the app — it shows every
 probe, read and write with raw hex values. *Copy log* puts it on the clipboard

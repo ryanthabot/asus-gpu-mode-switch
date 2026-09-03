@@ -9,6 +9,13 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.2** — leaving **dGPU-direct (Ultimate)** display mode is now a safe
+> two-step flow (MUX back to hybrid → restart → apply the dGPU power flag on
+> the next run), matching what G-Helper and Armoury Crate do. A refused MUX
+> write is no longer a fatal error. Also adds full **diagnostic logging**:
+> click *View log → Copy log* in the app, or grab
+> `%LOCALAPPDATA%\GpuModeSwitch\EcoMode.log` / `GoTime.log`.
+>
 > **v1.0.1** — switched from the `ASUS_WMI` WMI class to the direct ACPI device
 > (`\\.\ATKACPI`) that modern firmware actually uses. This fixes the
 > *"ASUS hardware interface not found"* error on models like the
@@ -32,8 +39,17 @@ Grab both executables from the
 
 1. Close games and other apps that are using the dGPU.
 2. Double-click **Go Time.exe** or **Eco Mode.exe**, confirm the UAC prompt.
-3. Wait for the green/red result screen, then click **Restart now** (a restart is
+3. Wait for the result screen, then click **Restart now** (a restart is
    required for the display path / dGPU power state to fully apply).
+4. **If the laptop was in dGPU-direct (Ultimate) display mode**, the app will
+   say *"Step 1 of 2 done"*: restart, then run the same app once more to apply
+   the dGPU power flag. This matches how G-Helper and Armoury Crate sequence
+   the switch.
+
+**When something goes wrong:** click **View log** in the app — it shows every
+probe, read and write with raw hex values. *Copy log* puts it on the clipboard
+so you can paste it into a bug report. The same log is written to
+`%LOCALAPPDATA%\GpuModeSwitch\EcoMode.log` (or `GoTime.log`).
 
 Run either app with `--status` (e.g. from a terminal) to see the detected
 hardware interface and the current GPU state without switching anything.
@@ -81,6 +97,8 @@ References: the [Linux kernel `asus-wmi` driver](https://github.com/torvalds/lin
   Click *More info* → *Run anyway*.
 - **Stays in the old mode until you restart** — by design; the MUX/power change
   finalizes on reboot.
+- **Reporting a bug** — click *View log → Copy log* in the app and paste the
+  output into your issue; it contains everything needed to diagnose remotely.
 
 ## Building from source
 

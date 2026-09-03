@@ -9,10 +9,13 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.7** — the main window and the diagnostic log window now appear on
+> the taskbar (with the app's own NVIDIA-eye / leaf icon), instead of being
+> hidden while the switch runs.
+>
 > **v1.0.6** — application icons added: **Go Time** carries the NVIDIA eye on a
 > dark tile (rendered from the official glyph), **Eco Mode** a white leaf on
-> green. Both embedded as multi-size `.ico` (16/32/48/256). No behavior
-> changes vs v1.0.4/v1.0.5 — either works on the G513QR.
+> green. Both embedded as multi-size `.ico` (16/32/48/256).
 >
 > **v1.0.5** — fixed MUX misdetection diagnosed from a G513QR log: a bare-zero
 > DSTS response (no status bits) now correctly means *"device not implemented

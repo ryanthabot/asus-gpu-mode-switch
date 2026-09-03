@@ -1,8 +1,13 @@
-//  GpuModeSwitch.cs  (v1.0.6)
+//  GpuModeSwitch.cs  (v1.0.7)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
+//
+//  v1.0.7 changes:
+//    - The main window and the diagnostic log window now appear on the
+//      taskbar (they were deliberately hidden before), and both carry the
+//      app's own icon on their title bar / taskbar button.
 //
 //  v1.0.6 changes:
 //    - Application icons: "Go Time" carries the NVIDIA eye on a dark tile,
@@ -53,7 +58,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.6";
+        public const string Version = "1.0.7";
 
         [STAThread]
         private static void Main(string[] args)
@@ -798,22 +803,39 @@ namespace GpuModeSwitch
         }
     }
 
+    // Gives a form the executable's own icon (title bar / taskbar button).
+    internal static class WindowIcons
+    {
+        public static void Apply(Form form)
+        {
+            try
+            {
+                form.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            }
+            catch
+            {
+                // exe icon unavailable for some reason - the generic one is fine
+            }
+        }
+    }
+
     // ---------------------------------------------------------------------
     // Log viewer: read-only text box with one-click copy so the log can be
     // relayed from a remote machine.
     // ---------------------------------------------------------------------
     internal class LogForm : Form
     {
-        public LogForm()
+        public LogForm(string appName)
         {
-            Text = "Diagnostic log";
+            Text = "Diagnostic log - " + appName + " v" + Program.Version;
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             MinimizeBox = false;
-            ShowInTaskbar = false;
+            ShowInTaskbar = true;
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(640, 460);
             BackColor = Color.FromArgb(24, 24, 28);
+            WindowIcons.Apply(this);
 
             TextBox box = new TextBox();
             box.Multiline = true;
@@ -903,7 +925,8 @@ namespace GpuModeSwitch
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
-            ShowInTaskbar = false;
+            ShowInTaskbar = true;
+            WindowIcons.Apply(this);
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(480, 262);
             BackColor = Color.FromArgb(24, 24, 28);
@@ -965,7 +988,7 @@ namespace GpuModeSwitch
             _log.Location = new Point(140, 216);
             _log.Click += delegate
             {
-                using (LogForm lf = new LogForm()) lf.ShowDialog(this);
+                using (LogForm lf = new LogForm(TargetEco ? "Eco Mode" : "Go Time")) lf.ShowDialog(this);
             };
 
             Controls.Add(_title);

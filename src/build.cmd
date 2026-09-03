@@ -19,13 +19,13 @@ if not exist "%CSC%" (
 if not exist dist mkdir dist
 
 %CSC% /nologo /target:winexe /platform:anycpu /optimize+ /define:MODE_STANDARD ^
-    /win32manifest:src\app.manifest ^
+    /win32manifest:src\app.manifest /win32icon:src\gotime.ico ^
     /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Management.dll /r:System.ServiceProcess.dll ^
     /out:"dist\Go Time.exe" src\GpuModeSwitch.cs
 if errorlevel 1 exit /b 1
 
 %CSC% /nologo /target:winexe /platform:anycpu /optimize+ /define:MODE_ECO ^
-    /win32manifest:src\app.manifest ^
+    /win32manifest:src\app.manifest /win32icon:src\ecomode.ico ^
     /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Management.dll /r:System.ServiceProcess.dll ^
     /out:"dist\Eco Mode.exe" src\GpuModeSwitch.cs
 if errorlevel 1 exit /b 1

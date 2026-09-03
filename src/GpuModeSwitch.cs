@@ -1,8 +1,13 @@
-//  GpuModeSwitch.cs  (v1.0.5)
+//  GpuModeSwitch.cs  (v1.0.6)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
+//
+//  v1.0.6 changes:
+//    - Application icons: "Go Time" carries the NVIDIA eye on a dark tile,
+//      "Eco Mode" a white leaf on green. Both embedded as multi-size .ico
+//      (16/32/48/256) via /win32icon. No behavior changes.
 //
 //  v1.0.5 changes (diagnosed from a G513QR field log):
 //    - A DSTS response of bare 0x00000000 (no status/presence bits) now means
@@ -48,7 +53,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.5";
+        public const string Version = "1.0.6";
 
         [STAThread]
         private static void Main(string[] args)

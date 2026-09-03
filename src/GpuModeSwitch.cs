@@ -1,8 +1,17 @@
-//  GpuModeSwitch.cs  (v1.0.2)
+//  GpuModeSwitch.cs  (v1.0.3)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
+//
+//  v1.0.3 changes:
+//    - Standard <-> Eco now applies LIVE, no restart required - like Armoury
+//      Crate. Before switching to Eco, the NVIDIA Display Container service
+//      is stopped so the firmware can cut dGPU power immediately; after
+//      switching back to Standard the service is restarted so the dGPU comes
+//      back right away (same choreography as G-Helper). A restart remains
+//      only an optional finalizer, and is still genuinely required when
+//      leaving dGPU-direct (Ultimate) display mode.
 //
 //  v1.0.2 changes:
 //    - Leaving dGPU-direct (Ultimate) display mode is now a two-step flow,
@@ -27,11 +36,13 @@
 //  compiler that ships with Windows - see src\build.cmd.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Management;
 using System.Runtime.InteropServices;
+using System.ServiceProcess;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -40,7 +51,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.2";
+        public const string Version = "1.0.3";
 
         [STAThread]
         private static void Main(string[] args)
@@ -412,6 +423,99 @@ namespace GpuModeSwitch
     }
 
     // ---------------------------------------------------------------------
+    // NVIDIA Display Container service control. Releasing this service lets
+    // the firmware actually cut dGPU power when switching to Eco (the driver
+    // otherwise holds the device), and restarting it after switching to
+    // Standard makes the dGPU come back without a reboot. Same as G-Helper.
+    // All of this is best-effort and logged; failures never abort the switch.
+    // ---------------------------------------------------------------------
+    internal static class GpuServices
+    {
+        private static string[] FindNvServices()
+        {
+            List<string> found = new List<string>();
+            try
+            {
+                ServiceController[] all = ServiceController.GetServices();
+                foreach (ServiceController s in all)
+                {
+                    if (s.ServiceName != null &&
+                        s.ServiceName.StartsWith("NVDisplay.Container", StringComparison.OrdinalIgnoreCase))
+                        found.Add(s.ServiceName);
+                    s.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Line("NV service lookup failed: " + ex.Message);
+            }
+            if (found.Count == 0)
+                Logger.Line("No NVIDIA Display Container services found (AMD-only system or driver absent).");
+            return found.ToArray();
+        }
+
+        // Used before switching to Eco: release the driver so power can be cut.
+        public static void StopAll()
+        {
+            string[] names = FindNvServices();
+            foreach (string n in names)
+            {
+                try
+                {
+                    using (ServiceController sc = new ServiceController(n))
+                    {
+                        if (sc.Status == ServiceControllerStatus.Running ||
+                            sc.Status == ServiceControllerStatus.StartPending)
+                        {
+                            sc.Stop();
+                            sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
+                            Logger.Line("NV service stopped: " + n);
+                        }
+                        else
+                        {
+                            Logger.Line("NV service already " + sc.Status + ": " + n);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Line("NV service stop failed (" + n + "): " + ex.Message);
+                }
+            }
+        }
+
+        // Used after switching to Standard: (re)start the driver service so the
+        // dGPU is usable immediately.
+        public static void RestartAll()
+        {
+            string[] names = FindNvServices();
+            foreach (string n in names)
+            {
+                try
+                {
+                    using (ServiceController sc = new ServiceController(n))
+                    {
+                        if (sc.Status == ServiceControllerStatus.Running ||
+                            sc.Status == ServiceControllerStatus.StartPending)
+                        {
+                            sc.Stop();
+                            sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
+                            Logger.Line("NV service stopped for restart: " + n);
+                        }
+                        sc.Start();
+                        sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
+                        Logger.Line("NV service running: " + n);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Line("NV service restart failed (" + n + "): " + ex.Message);
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
     // High-level control: picks a working transport + device IDs, then
     // switches the GPU mode with logging and read-back verification.
     // ---------------------------------------------------------------------
@@ -559,15 +663,43 @@ namespace GpuModeSwitch
             int want = eco ? 1 : 0;
             if (gpuBefore != want)
             {
+                if (eco)
+                {
+                    // Release the NVIDIA driver first so the firmware can
+                    // actually cut power when the flag is written (G-Helper
+                    // order: stop service, then write the eco flag).
+                    Logger.Line("Releasing NVIDIA driver service before the eco write...");
+                    GpuServices.StopAll();
+                }
+
                 Logger.Line("Writing dGPU power flag: " + want);
                 if (!_transport.Write(_dgpuId, (uint)want))
                 {
-                    o.Headline = "The dGPU power change was refused";
-                    o.Detail = eco
-                        ? "Something is still using the dGPU. Close games and 3D apps,\nthen run this again.\n\nFull details: View log."
-                        : "The firmware refused the change. Restart the laptop and try again.\n\nFull details: View log.";
-                    Logger.Line("dGPU write refused by firmware.");
-                    return o;
+                    if (eco)
+                    {
+                        // The firmware can refuse while the GPU is busy; the
+                        // service is released now, so retry once.
+                        Logger.Line("dGPU write refused - retrying once after NV service release");
+                        GpuServices.StopAll();
+                        if (_transport.Write(_dgpuId, (uint)want))
+                        {
+                            Logger.Line("dGPU write accepted on retry.");
+                        }
+                        else
+                        {
+                            o.Headline = "The dGPU power change was refused";
+                            o.Detail = "Something is still using the dGPU. Close games and 3D apps,\nthen run this again.\n\nFull details: View log.";
+                            Logger.Line("dGPU write refused by firmware (after retry).");
+                            return o;
+                        }
+                    }
+                    else
+                    {
+                        o.Headline = "The dGPU power change was refused";
+                        o.Detail = "The firmware refused the change. Restart the laptop and try again.\n\nFull details: View log.";
+                        Logger.Line("dGPU write refused by firmware.");
+                        return o;
+                    }
                 }
             }
 
@@ -582,6 +714,16 @@ namespace GpuModeSwitch
                 return o;
             }
 
+            if (!eco)
+            {
+                // Give the bus a moment to re-enumerate the powered-on GPU,
+                // then restart the NVIDIA driver service so it comes back
+                // usable immediately - no reboot needed.
+                Logger.Line("Waiting 3s for the dGPU to re-enumerate...");
+                Thread.Sleep(3000);
+                GpuServices.RestartAll();
+            }
+
             o.Ok = true;
             o.Changed = gpuBefore != want;
 
@@ -593,14 +735,20 @@ namespace GpuModeSwitch
                 return o;
             }
 
-            o.NeedsRestart = true;
-            o.Headline = eco ? "Eco Mode set" : "Standard mode set";
-            string detail = eco
-                ? "dGPU powered off (battery friendly, quieter)."
-                : "dGPU enabled, hybrid (MSHybrid) display path.";
-            detail += "\nA restart is required for it to fully apply.";
-            o.Detail = detail;
-            Logger.Line("Switch complete.");
+            // The flag is written and verified - applied live, no restart needed
+            // (a restart only finalizes if something is holding the GPU).
+            o.NeedsRestart = false;
+            o.Headline = eco ? "Eco Mode applied" : "Standard mode applied";
+            o.Detail = eco
+                ? "dGPU power is now off (battery friendly, quieter). The NVIDIA\n" +
+                  "driver service was released so this took effect immediately.\n\n" +
+                  "If the dGPU still shows as active, a game was holding it -\n" +
+                  "close it and run this again. A restart also finalizes."
+                : "dGPU power is now on, hybrid (MSHybrid) display path. The NVIDIA\n" +
+                  "driver service was restarted so the GPU comes back right away.\n\n" +
+                  "Give it a few seconds if it is still re-enumerating; a restart\n" +
+                  "finalizes if anything looks off.";
+            Logger.Line("Switch complete (applied live, no restart required).");
             return o;
         }
 

@@ -9,12 +9,15 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
-> **v1.0.2** — leaving **dGPU-direct (Ultimate)** display mode is now a safe
-> two-step flow (MUX back to hybrid → restart → apply the dGPU power flag on
-> the next run), matching what G-Helper and Armoury Crate do. A refused MUX
-> write is no longer a fatal error. Also adds full **diagnostic logging**:
-> click *View log → Copy log* in the app, or grab
-> `%LOCALAPPDATA%\GpuModeSwitch\EcoMode.log` / `GoTime.log`.
+> **v1.0.3** — Standard ↔ Eco now applies **live, without a restart** — like
+> Armoury Crate. The NVIDIA Display Container driver service is released
+> before switching to Eco (so the firmware can cut dGPU power immediately)
+> and restarted after switching back to Standard (so the GPU returns right
+> away). A restart is now only needed when leaving **dGPU-direct (Ultimate)**
+> display mode, which is a physical display-path switch.
+>
+> **v1.0.2** — safe two-step Ultimate exit + full diagnostic logging
+> (*View log → Copy log*, plus `%LOCALAPPDATA%\GpuModeSwitch\`).
 >
 > **v1.0.1** — switched from the `ASUS_WMI` WMI class to the direct ACPI device
 > (`\\.\ATKACPI`) that modern firmware actually uses. This fixes the
@@ -39,12 +42,13 @@ Grab both executables from the
 
 1. Close games and other apps that are using the dGPU.
 2. Double-click **Go Time.exe** or **Eco Mode.exe**, confirm the UAC prompt.
-3. Wait for the result screen, then click **Restart now** (a restart is
-   required for the display path / dGPU power state to fully apply).
-4. **If the laptop was in dGPU-direct (Ultimate) display mode**, the app will
-   say *"Step 1 of 2 done"*: restart, then run the same app once more to apply
-   the dGPU power flag. This matches how G-Helper and Armoury Crate sequence
-   the switch.
+3. Done — the switch applies **live, no restart needed** (the app releases/restarts
+   the NVIDIA driver service behind the scenes, which is what makes it instant).
+
+A restart is only needed in one case: if the laptop is in **dGPU-direct
+(Ultimate)** display mode, the app will say *"Step 1 of 2 done"* — that display
+path is a physical switch that lands at reboot. Restart, then run the same app
+once more to apply the dGPU power flag.
 
 **When something goes wrong:** click **View log** in the app — it shows every
 probe, read and write with raw hex values. *Copy log* puts it on the clipboard

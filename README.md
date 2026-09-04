@@ -9,6 +9,14 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.10** — **Windows 11 Energy Saver is now synced with the mode**: Eco
+> Mode turns Energy Saver **on**, Go Time turns it **off** (the same instant
+> toggle as the Quick Settings tile — implemented via the
+> `EnergySaverState` value under `HKLM\...\Control\Power`, since there is no
+> documented API for the instant toggle). The current state shows in
+> `--status` and the confirm view; every read/write is logged, and an Energy
+> Saver failure never blocks the GPU switch.
+>
 > **v1.0.9** — **one-click is back**: launching an app probes and applies
 > immediately, with the themed window and shimmer animation running the whole
 > time. The confirm step still exists as an opt-in: run with `--confirm` to

@@ -1,13 +1,18 @@
-//  GpuModeSwitch.cs  (v1.0.9)
+//  GpuModeSwitch.cs  (v1.0.10)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
 //
-//  v1.0.9 changes:
-//    - One-click is the default again: probe -> apply -> result, with the
-//      themed window + shimmer animation the whole time. The confirm step
-//      from v1.0.8 is still available behind an opt-in --confirm flag.
+//  v1.0.10 changes:
+//    - Windows 11 Energy Saver is now synced with the GPU mode: Eco Mode turns
+//      Energy Saver ON, Go Time turns it OFF. Implemented via the same
+//      registry value the Quick Settings tile writes
+//      (HKLM\SYSTEM\CurrentControlSet\Control\Power\EnergySaverState:
+//       1 = on, 2 = off - there is no documented instant-toggle API). Every
+//      read, write and read-back is logged; a failure never blocks the GPU
+//      switch and is surfaced in the result text.
+//    - --status and the confirm pre-check now report the Energy Saver state.
 //
 //  v1.0.7: main + log windows appear on the taskbar with the app icon.
 //  v1.0.6: application icons. v1.0.5: bare-zero DSTS = device not implemented.
@@ -40,12 +45,13 @@ using System.ServiceProcess;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.9";
+        public const string Version = "1.0.10";
 
         [STAThread]
         private static void Main(string[] args)
@@ -562,6 +568,8 @@ namespace GpuModeSwitch
                 s += ", MUX " + (mux == 1 ? "hybrid" : mux == 0 ? "dGPU-direct" : "unknown");
             }
             s += ".\nTarget: " + (eco ? "Eco Mode (dGPU off)" : "Standard mode (dGPU on)") + ".";
+            bool? es = EnergySaver.Get();
+            s += "\nWindows Energy Saver: " + (es == null ? "unknown" : (es == true ? "on" : "off")) + ".";
             if (gpu == (eco ? 1 : 0))
             {
                 s += "\nAlready in the target mode - Apply will simply confirm it.";
@@ -596,7 +604,14 @@ namespace GpuModeSwitch
                 o.Ok = true;
                 o.Changed = false;
                 o.Headline = eco ? "Already in Eco Mode" : "Already in Standard mode";
-                o.Detail = "Nothing needed changing.\nCurrent state: dGPU " + (eco ? "off" : "on") + ", hybrid display path.";
+                // Still sync Energy Saver with the mode - that's part of the deal.
+                Logger.Line("Windows Energy Saver: setting " + (eco ? "ON" : "OFF"));
+                bool esOk = EnergySaver.Set(eco);
+                o.Detail = "Nothing needed changing.\nCurrent state: dGPU " + (eco ? "off" : "on") +
+                           ", hybrid display path.\n" +
+                           (esOk
+                               ? "Windows Energy Saver: " + (eco ? "on." : "off.")
+                               : "Note: Windows Energy Saver could not be changed - see View log.");
                 Logger.Line("No change needed - already in target mode.");
                 return o;
             }
@@ -689,6 +704,13 @@ namespace GpuModeSwitch
                   "driver service was restarted so the GPU comes back right away.\n\n" +
                   "Give it a few seconds if it is still re-enumerating; a restart\n" +
                   "finalizes if anything looks off.";
+
+            // Sync Windows 11 Energy Saver with the mode (Eco -> on, Standard -> off).
+            Logger.Line("Windows Energy Saver: setting " + (eco ? "ON" : "OFF"));
+            bool esApplied = EnergySaver.Set(eco);
+            o.Detail += esApplied
+                ? "\nWindows Energy Saver: turned " + (eco ? "on." : "off.")
+                : "\nNote: Windows Energy Saver could not be changed - see View log.";
             Logger.Line("Switch complete (applied live, no restart required).");
             return o;
         }
@@ -716,6 +738,8 @@ namespace GpuModeSwitch
             {
                 s += "GPU MUX: not available on this model\n";
             }
+            bool? es = EnergySaver.Get();
+            s += "Windows Energy Saver: " + (es == null ? "unknown" : (es == true ? "on" : "off")) + "\n";
 
 #if MODE_ECO
             s += "\nThis app switches to: ECO (dGPU off)";
@@ -839,6 +863,81 @@ namespace GpuModeSwitch
             {
                 // exe icon unavailable for some reason - the generic one is fine
             }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Windows 11 Energy Saver instant toggle. There is no documented API for
+    // the "Turn on now" switch (even G-Helper lacks it), but the Quick
+    // Settings tile writes this registry value and the power service honors
+    // it live: 1 = energy saver on, 2 = off. Best-effort + fully logged; a
+    // failure never blocks the GPU switch.
+    // ---------------------------------------------------------------------
+    internal static class EnergySaver
+    {
+        private const string KeyPath = @"SYSTEM\CurrentControlSet\Control\Power";
+        private const string ValueName = "EnergySaverState";
+
+        // true = on, false = off, null = unknown / not present
+        public static bool? Get()
+        {
+            try
+            {
+                using (RegistryKey k = Registry.LocalMachine.OpenSubKey(KeyPath))
+                {
+                    if (k == null)
+                    {
+                        Logger.Line("EnergySaver: read failed - Control\\Power key missing");
+                        return null;
+                    }
+                    object v = k.GetValue(ValueName);
+                    if (v == null)
+                    {
+                        Logger.Line("EnergySaver: read failed - value not present yet");
+                        return null;
+                    }
+                    int i = Convert.ToInt32(v);
+                    if (i == 1) { Logger.Line("EnergySaver: read state=1 (on)"); return true; }
+                    if (i == 2) { Logger.Line("EnergySaver: read state=2 (off)"); return false; }
+                    Logger.Line("EnergySaver: read state=" + i + " (unrecognized)");
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Line("EnergySaver: read failed - " + ex.Message);
+                return null;
+            }
+        }
+
+        public static bool Set(bool on)
+        {
+            int v = on ? 1 : 2;
+            try
+            {
+                using (RegistryKey k = Registry.LocalMachine.OpenSubKey(KeyPath, true))
+                {
+                    if (k == null)
+                    {
+                        Logger.Line("EnergySaver: write failed - Control\\Power key missing");
+                        return false;
+                    }
+                    k.SetValue(ValueName, v, RegistryValueKind.DWord);
+                    Logger.Line("EnergySaver: state written = " + v + " (" + (on ? "ON" : "OFF") + ")");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Line("EnergySaver: write failed - " + ex.Message);
+                return false;
+            }
+
+            bool? back = Get();
+            bool ok = back == (bool?)on;
+            Logger.Line("EnergySaver: read-back " +
+                (back == null ? "unknown" : (back == true ? "ON" : "OFF")) +
+                (ok ? " (verified)" : " (MISMATCH)"));
+            return ok;
         }
     }
 

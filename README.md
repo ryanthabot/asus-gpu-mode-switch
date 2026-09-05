@@ -9,6 +9,13 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.20** — **Energy Saver flow reordered to search-first**: the
+> "Always use energy saver" toggle is looked for *before* any expansion
+> click, so an already expanded Energy saver card (persisted across runs by
+> the Settings process) is never collapsed by a blind click. The card's
+> show-more button is only pressed when the toggle is genuinely not visible,
+> and the search is retried after each expand attempt.
+>
 > **v1.0.19** — **log window rebuilt on a deterministic layout**: the Copy log
 > and Close buttons can no longer vanish regardless of DPI or resize state,
 > the log text is **pre-selected** when the window opens (Ctrl+C copies

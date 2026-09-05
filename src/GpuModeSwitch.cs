@@ -1,8 +1,16 @@
-//  GpuModeSwitch.cs  (v1.0.19)
+//  GpuModeSwitch.cs  (v1.0.20)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
+//
+//  v1.0.20 changes:
+//    - Energy Saver flow reordered to search-first: the "Always use energy
+//      saver" toggle is looked for before any expansion click, so an already
+//      expanded card (persisted across runs by the Settings process) is
+//      never accidentally collapsed by a blind show-more click. Expansion
+//      only happens when the toggle is genuinely not visible, and the
+//      search is retried after each expand attempt.
 //
 //  v1.0.19 changes:
 //    - Log window rebuilt on a TableLayoutPanel shell: the Copy log / Close
@@ -91,7 +99,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.19";
+        public const string Version = "1.0.20";
 
         [STAThread]
         private static void Main(string[] args)
@@ -1224,6 +1232,57 @@ namespace GpuModeSwitch
             mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
         }
 
+        // Presses the Energy saver card's own "Show more settings" button
+        // (matched by position within the card). Returns false when the card
+        // is already expanded and exposes no such button.
+        private static bool ClickEnergySaverExpand(AutomationElement settings)
+        {
+            AutomationElementCollection all = settings.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+
+            AutomationElement esGroup = null;
+            System.Windows.Rect gRect = System.Windows.Rect.Empty;
+            foreach (AutomationElement e in all)
+            {
+                string n = "";
+                try { n = e.Current.Name; } catch {}
+                if (n != null && n.StartsWith("Energy saver"))
+                {
+                    string ct = "";
+                    try { ct = e.Current.ControlType.ProgrammaticName; } catch {}
+                    if (ct.Contains("Group"))
+                    {
+                        esGroup = e;
+                        try { gRect = e.Current.BoundingRectangle; } catch {}
+                        break;
+                    }
+                }
+            }
+            if (esGroup == null)
+            {
+                Logger.Line("EnergySaver: Energy saver card not found on the page");
+                return false;
+            }
+            Logger.Line("EnergySaver: card found at " + gRect.X + "," + gRect.Y);
+
+            foreach (AutomationElement e in all)
+            {
+                string n = "";
+                try { n = e.Current.Name; } catch {}
+                if (n != "Show more settings") continue;
+                System.Windows.Rect r = System.Windows.Rect.Empty;
+                try { r = e.Current.BoundingRectangle; } catch {}
+                if (r.IsEmpty) continue;
+                float cy = (float)(r.Y + r.Height / 2);
+                if (cy >= gRect.Y - 5 && cy <= gRect.Y + gRect.Height + 5)
+                {
+                    ClickCenter(r);
+                    return true;
+                }
+            }
+            Logger.Line("EnergySaver: no show-more button inside the card - it appears already expanded");
+            return false;
+        }
+
         private static void CloseSettings(AutomationElement settings)
         {
             try
@@ -1264,67 +1323,32 @@ namespace GpuModeSwitch
             }
             Thread.Sleep(800);
 
-            // Expand the Energy saver card: find its own "Show more settings"
-            // button by position within the card rectangle.
-            AutomationElement esGroup = null;
-            System.Windows.Rect gRect = System.Windows.Rect.Empty;
-            AutomationElementCollection all = settings.FindAll(TreeScope.Descendants, Condition.TrueCondition);
-            foreach (AutomationElement e in all)
-            {
-                string n = "";
-                try { n = e.Current.Name; } catch {}
-                if (n != null && n.StartsWith("Energy saver"))
-                {
-                    string ct = "";
-                    try { ct = e.Current.ControlType.ProgrammaticName; } catch {}
-                    if (ct.Contains("Group"))
-                    {
-                        esGroup = e;
-                        try { gRect = e.Current.BoundingRectangle; } catch {}
-                        break;
-                    }
-                }
-            }
+            Thread.Sleep(800);
 
-            if (esGroup != null)
-            {
-                Logger.Line("EnergySaver: card found at " + gRect.X + "," + gRect.Y);
-                AutomationElement more = null;
-                System.Windows.Rect moreRect = System.Windows.Rect.Empty;
-                foreach (AutomationElement e in all)
-                {
-                    string n = "";
-                    try { n = e.Current.Name; } catch {}
-                    if (n != "Show more settings") continue;
-                    System.Windows.Rect r = System.Windows.Rect.Empty;
-                    try { r = e.Current.BoundingRectangle; } catch {}
-                    if (r.IsEmpty) continue;
-                    float cy = (float)(r.Y + r.Height / 2);
-                    if (cy >= gRect.Y - 5 && cy <= gRect.Y + gRect.Height + 5)
-                    {
-                        more = e;
-                        moreRect = r;
-                        break;
-                    }
-                }
-                if (more != null)
-                {
-                    ClickCenter(moreRect);
-                    Thread.Sleep(900);
-                    Logger.Line("EnergySaver: card expanded");
-                }
-                else
-                {
-                    Logger.Line("EnergySaver: card appears already expanded");
-                }
-            }
-
+            // Search FIRST. If the toggle is already visible (the card stays
+            // expanded across runs while the Settings process is alive), no
+            // expansion click is made at all - clicking it blindly would
+            // collapse the card and hide the toggle.
             AutomationElement toggle = null;
-            for (int i = 0; i < 8 && toggle == null; i++)
+            for (int attempt = 0; attempt < 3 && toggle == null; attempt++)
             {
-                Thread.Sleep(350);
-                toggle = FindToggleByName(settings, "Always use energy saver");
+                for (int i = 0; i < 4 && toggle == null; i++)
+                {
+                    Thread.Sleep(350);
+                    toggle = FindToggleByName(settings, "Always use energy saver");
+                }
+                if (toggle != null)
+                {
+                    if (attempt > 0) Logger.Line("EnergySaver: toggle found after expanding the card");
+                    break;
+                }
+
+                // Not visible: the card is collapsed - press its own
+                // "Show more settings" button to expand it.
+                Logger.Line("EnergySaver: toggle not visible - expanding the Energy saver card (attempt " + (attempt + 1) + "/3)");
+                if (!ClickEnergySaverExpand(settings)) break;
             }
+
             if (toggle == null)
             {
                 Logger.Line("EnergySaver: 'Always use energy saver' toggle not found");

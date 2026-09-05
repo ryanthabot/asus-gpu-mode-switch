@@ -1,8 +1,15 @@
-//  GpuModeSwitch.cs  (v1.0.18)
+//  GpuModeSwitch.cs  (v1.0.19)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
+//
+//  v1.0.19 changes:
+//    - Log window rebuilt on a TableLayoutPanel shell: the Copy log / Close
+//      buttons can no longer disappear regardless of DPI or resize state.
+//    - The log text is auto-selected when the window opens (HideSelection
+//      off), so Ctrl+C copies straight away; Copy log remains as the
+//      one-click alternative.
 //
 //  v1.0.18 changes (Go Time tray picker):
 //    - Watchdog handling: apps like Parsec are relaunched by their own
@@ -84,7 +91,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.18";
+        public const string Version = "1.0.19";
 
         [STAThread]
         private static void Main(string[] args)
@@ -1572,30 +1579,19 @@ namespace GpuModeSwitch
             box.BorderStyle = BorderStyle.FixedSingle;
             box.Font = new Font("Consolas", 9f);
             box.Dock = DockStyle.Fill;
+            box.HideSelection = false;      // keep the selection visible without focus
             box.Text = Logger.Text;
-
-            Panel bottom = new Panel();
-            bottom.Dock = DockStyle.Bottom;
-            bottom.Height = 46;
-            bottom.BackColor = Color.FromArgb(24, 24, 28);
-
-            Label pathLabel = new Label();
-            pathLabel.Text = Logger.FilePath;
-            pathLabel.ForeColor = Color.FromArgb(140, 140, 148);
-            pathLabel.AutoEllipsis = true;
-            pathLabel.Size = new Size(300, 22);
-            pathLabel.Location = new Point(12, 12);
-            pathLabel.Anchor = AnchorStyles.Left;
+            box.SelectAll();                // pre-selected: Ctrl+C copies immediately
 
             Button copy = new Button();
             copy.Text = "Copy log";
+            copy.AutoSize = true;
             copy.FlatStyle = FlatStyle.Flat;
             copy.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
             copy.ForeColor = Color.White;
             copy.BackColor = Color.FromArgb(45, 45, 52);
-            copy.Size = new Size(100, 30);
-            copy.Location = new Point(ClientSize.Width - 226, 7);
-            copy.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            copy.Padding = new Padding(6, 4, 6, 4);
+            copy.Margin = new Padding(4, 6, 4, 6);
             copy.Click += delegate
             {
                 try
@@ -1613,20 +1609,48 @@ namespace GpuModeSwitch
 
             Button close = new Button();
             close.Text = "Close";
+            close.AutoSize = true;
             close.FlatStyle = FlatStyle.Flat;
             close.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
             close.ForeColor = Color.FromArgb(210, 210, 216);
             close.BackColor = Color.FromArgb(45, 45, 52);
-            close.Size = new Size(100, 30);
-            close.Location = new Point(ClientSize.Width - 116, 7);
-            close.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            close.Padding = new Padding(6, 4, 6, 4);
+            close.Margin = new Padding(4, 6, 12, 6);
             close.Click += delegate { Close(); };
 
-            bottom.Controls.Add(pathLabel);
-            bottom.Controls.Add(copy);
-            bottom.Controls.Add(close);
-            Controls.Add(box);
-            Controls.Add(bottom);
+            FlowLayoutPanel buttons = new FlowLayoutPanel();
+            buttons.Dock = DockStyle.Bottom;
+            buttons.AutoSize = true;
+            buttons.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            buttons.FlowDirection = FlowDirection.LeftToRight;
+            buttons.BackColor = Color.FromArgb(24, 24, 28);
+            buttons.Controls.Add(copy);
+            buttons.Controls.Add(close);
+
+            Label pathLabel = new Label();
+            pathLabel.Text = "Log file: " + Logger.FilePath;
+            pathLabel.ForeColor = Color.FromArgb(140, 140, 148);
+            pathLabel.AutoEllipsis = true;
+            pathLabel.Dock = DockStyle.Top;
+            pathLabel.Height = 26;
+            pathLabel.TextAlign = ContentAlignment.MiddleLeft;
+            pathLabel.Padding = new Padding(12, 4, 12, 0);
+            pathLabel.BackColor = Color.FromArgb(24, 24, 28);
+
+            // TableLayoutPanel shell: deterministic at any DPI and window size.
+            TableLayoutPanel layout = new TableLayoutPanel();
+            layout.Dock = DockStyle.Fill;
+            layout.ColumnCount = 1;
+            layout.RowCount = 3;
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.BackColor = Color.FromArgb(24, 24, 28);
+            layout.Controls.Add(pathLabel, 0, 0);
+            layout.Controls.Add(box, 0, 1);
+            layout.Controls.Add(buttons, 0, 2);
+            Controls.Add(layout);
         }
     }
 

@@ -9,6 +9,11 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.19** — **log window rebuilt on a deterministic layout**: the Copy log
+> and Close buttons can no longer vanish regardless of DPI or resize state,
+> the log text is **pre-selected** when the window opens (Ctrl+C copies
+> straight away), and the log file path is shown in its own top strip.
+>
 > **v1.0.18** — **tray app close now handles watchdog services**: Parsec's
 > own Windows service was silently relaunching `parsecmd` after every kill.
 > The picker now discovers matching services from the Services registry,

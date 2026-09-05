@@ -1,8 +1,17 @@
-//  GpuModeSwitch.cs  (v1.0.15)
+//  GpuModeSwitch.cs  (v1.0.16)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
+//
+//  v1.0.16 changes:
+//    - Layout fixes: window widened (560x400 default) with proper inner
+//      padding so no text clips at the edges; subtitle fits; detail area
+//      taller. Both windows are now resizable (drag edges/corners; the
+//      themed borderless main window handles edge hit-testing itself and
+//      keeps its rounded corners while resizing; the log window is a
+//      standard resizable window with docked layout). Controls reflow with
+//      anchors while resizing.
 //
 //  v1.0.15 changes:
 //    - Energy Saver control that actually works on build 26200+: the app
@@ -58,7 +67,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.15";
+        public const string Version = "1.0.16";
 
         [STAThread]
         private static void Main(string[] args)
@@ -1527,12 +1536,12 @@ namespace GpuModeSwitch
         public LogForm(string appName)
         {
             Text = "Diagnostic log - " + appName + " v" + Program.Version;
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            MaximizeBox = false;
+            FormBorderStyle = FormBorderStyle.Sizable;
+            MaximizeBox = true;
             MinimizeBox = false;
             ShowInTaskbar = true;
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(640, 460);
+            ClientSize = new Size(680, 480);
             BackColor = Color.FromArgb(24, 24, 28);
             WindowIcons.Apply(this);
 
@@ -1545,16 +1554,21 @@ namespace GpuModeSwitch
             box.ForeColor = Color.FromArgb(205, 205, 210);
             box.BorderStyle = BorderStyle.FixedSingle;
             box.Font = new Font("Consolas", 9f);
-            box.Location = new Point(12, 12);
-            box.Size = new Size(616, 380);
+            box.Dock = DockStyle.Fill;
             box.Text = Logger.Text;
+
+            Panel bottom = new Panel();
+            bottom.Dock = DockStyle.Bottom;
+            bottom.Height = 46;
+            bottom.BackColor = Color.FromArgb(24, 24, 28);
 
             Label pathLabel = new Label();
             pathLabel.Text = Logger.FilePath;
             pathLabel.ForeColor = Color.FromArgb(140, 140, 148);
             pathLabel.AutoEllipsis = true;
-            pathLabel.Size = new Size(400, 20);
-            pathLabel.Location = new Point(12, 402);
+            pathLabel.Size = new Size(300, 22);
+            pathLabel.Location = new Point(12, 12);
+            pathLabel.Anchor = AnchorStyles.Left;
 
             Button copy = new Button();
             copy.Text = "Copy log";
@@ -1563,7 +1577,8 @@ namespace GpuModeSwitch
             copy.ForeColor = Color.White;
             copy.BackColor = Color.FromArgb(45, 45, 52);
             copy.Size = new Size(100, 30);
-            copy.Location = new Point(416, 400);
+            copy.Location = new Point(ClientSize.Width - 226, 7);
+            copy.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             copy.Click += delegate
             {
                 try
@@ -1586,13 +1601,15 @@ namespace GpuModeSwitch
             close.ForeColor = Color.FromArgb(210, 210, 216);
             close.BackColor = Color.FromArgb(45, 45, 52);
             close.Size = new Size(100, 30);
-            close.Location = new Point(528, 400);
+            close.Location = new Point(ClientSize.Width - 116, 7);
+            close.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             close.Click += delegate { Close(); };
 
+            bottom.Controls.Add(pathLabel);
+            bottom.Controls.Add(copy);
+            bottom.Controls.Add(close);
             Controls.Add(box);
-            Controls.Add(pathLabel);
-            Controls.Add(copy);
-            Controls.Add(close);
+            Controls.Add(bottom);
         }
     }
 
@@ -1645,11 +1662,13 @@ namespace GpuModeSwitch
             MinimizeBox = false;
             ShowInTaskbar = true;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(470, 330);
+            MinimumSize = new Size(560, 400);
+            ClientSize = new Size(560, 400);
             BackColor = Color.FromArgb(22, 22, 26);
             Font = new Font("Segoe UI", 9.5f);
             Opacity = 0;
             WindowIcons.Apply(this);
+            Region = new Region(UiShapes.RoundRect(0, 0, ClientSize.Width, ClientSize.Height, 26));
 
             Bitmap logo = LoadLogo();
             if (logo != null)
@@ -1683,6 +1702,7 @@ namespace GpuModeSwitch
             _x.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             _x.Size = new Size(32, 26);
             _x.Location = new Point(ClientSize.Width - 42, 10);
+            _x.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             _x.TabStop = false;
             _x.Click += delegate
             {
@@ -1693,6 +1713,7 @@ namespace GpuModeSwitch
             _bar.Accent = _accent;
             _bar.Location = new Point(24, 92);
             _bar.Size = new Size(ClientSize.Width - 48, 8);
+            _bar.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
             _status.Text = "Starting...";
             _status.ForeColor = Color.FromArgb(235, 235, 240);
@@ -1701,30 +1722,36 @@ namespace GpuModeSwitch
             _status.Size = new Size(ClientSize.Width - 48, 28);
             _status.Location = new Point(24, 118);
             _status.BackColor = Color.Transparent;
+            _status.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
             _detail.ForeColor = Color.FromArgb(165, 165, 172);
             _detail.AutoSize = false;
-            _detail.Size = new Size(ClientSize.Width - 48, 100);
+            _detail.Size = new Size(ClientSize.Width - 48, 140);
             _detail.Location = new Point(24, 148);
             _detail.BackColor = Color.Transparent;
+            _detail.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
             InitButton(_apply, "Apply", 150, 24, 36);
             _apply.BackColor = _accent;
             _apply.ForeColor = Color.White;
             _apply.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             _apply.FlatAppearance.BorderSize = 0;
+            _apply.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             _apply.Click += delegate { BeginApply(); };
 
             InitButton(_cancel, "Cancel", 90, 182, 36);
+            _cancel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             _cancel.Click += delegate { Close(); };
 
             InitButton(_restart, "Restart now", 120, 24, 36);
             _restart.Visible = false;
             _restart.FlatAppearance.BorderColor = _accent;
+            _restart.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             _restart.Click += OnRestart;
 
             InitButton(_logBtn, "View log", 90, 152, 36);
             _logBtn.Visible = false;
+            _logBtn.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             _logBtn.Click += delegate
             {
                 using (LogForm lf = new LogForm(TargetEco ? "Eco Mode" : "Go Time")) lf.ShowDialog(this);
@@ -1732,6 +1759,7 @@ namespace GpuModeSwitch
 
             InitButton(_close, "Close", 80, 250, 36);
             _close.Visible = false;
+            _close.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             _close.Click += delegate { Close(); };
 
             Controls.AddRange(new Control[]
@@ -1794,19 +1822,50 @@ namespace GpuModeSwitch
             _bar.Advance();
         }
 
-        // Borderless window: let any bare form area drag the window.
+        // Borderless window: edges resize, any bare interior area drags.
         protected override void WndProc(ref Message m)
         {
             const int WM_NCHITTEST = 0x84;
             const int HTCLIENT = 1;
             const int HTCAPTION = 2;
+            const int HTLEFT = 10;
+            const int HTRIGHT = 11;
+            const int HTTOP = 12;
+            const int HTTOPLEFT = 13;
+            const int HTTOPRIGHT = 14;
+            const int HTBOTTOM = 15;
+            const int HTBOTTOMLEFT = 16;
+            const int HTBOTTOMRIGHT = 17;
+
             if (m.Msg == WM_NCHITTEST)
             {
                 base.WndProc(ref m);
-                if ((int)m.Result == HTCLIENT) m.Result = (IntPtr)HTCAPTION;
+                if ((int)m.Result == HTCLIENT)
+                {
+                    int lp = m.LParam.ToInt32();
+                    Point pt = PointToClient(new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF)));
+                    int e = 10;
+                    bool l = pt.X <= e, r = pt.X >= ClientSize.Width - e;
+                    bool t = pt.Y <= e, b = pt.Y >= ClientSize.Height - e;
+                    if (t && l) m.Result = (IntPtr)HTTOPLEFT;
+                    else if (t && r) m.Result = (IntPtr)HTTOPRIGHT;
+                    else if (b && l) m.Result = (IntPtr)HTBOTTOMLEFT;
+                    else if (b && r) m.Result = (IntPtr)HTBOTTOMRIGHT;
+                    else if (l) m.Result = (IntPtr)HTLEFT;
+                    else if (r) m.Result = (IntPtr)HTRIGHT;
+                    else if (t) m.Result = (IntPtr)HTTOP;
+                    else if (b) m.Result = (IntPtr)HTBOTTOM;
+                    else m.Result = (IntPtr)HTCAPTION;
+                }
                 return;
             }
             base.WndProc(ref m);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            Region = new Region(UiShapes.RoundRect(0, 0, ClientSize.Width, ClientSize.Height, 26));
         }
 
         // ---- phase helpers -------------------------------------------------

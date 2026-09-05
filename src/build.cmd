@@ -18,10 +18,17 @@ if not exist "%CSC%" (
 
 if not exist dist mkdir dist
 
+rem UI Automation assemblies live in the GAC (not the framework directory)
+set "UIAC_DIR="
+set "UIAT_DIR="
+for /f "delims=" %%i in ('dir /b /ad "%WINDIR%\Microsoft.NET\assembly\GAC_MSIL\UIAutomationClient" 2^>nul') do set "UIAC_DIR=%WINDIR%\Microsoft.NET\assembly\GAC_MSIL\UIAutomationClient\%%i"
+for /f "delims=" %%i in ('dir /b /ad "%WINDIR%\Microsoft.NET\assembly\GAC_MSIL\UIAutomationTypes" 2^>nul') do set "UIAT_DIR=%WINDIR%\Microsoft.NET\assembly\GAC_MSIL\UIAutomationTypes\%%i"
+
 %CSC% /nologo /target:winexe /platform:anycpu /optimize+ /define:MODE_STANDARD ^
     /win32manifest:src\app.manifest /win32icon:src\gotime.ico ^
     /res:src\gotime-256.png,GpuModeSwitch.appicon.png ^
     /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Management.dll /r:System.ServiceProcess.dll ^
+    /r:"%UIAC_DIR%\UIAutomationClient.dll" /r:"%UIAT_DIR%\UIAutomationTypes.dll" ^
     /out:"dist\Go Time.exe" src\GpuModeSwitch.cs
 if errorlevel 1 exit /b 1
 
@@ -29,6 +36,7 @@ if errorlevel 1 exit /b 1
     /win32manifest:src\app.manifest /win32icon:src\ecomode.ico ^
     /res:src\ecomode-256.png,GpuModeSwitch.appicon.png ^
     /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Management.dll /r:System.ServiceProcess.dll ^
+    /r:"%UIAC_DIR%\UIAutomationClient.dll" /r:"%UIAT_DIR%\UIAutomationTypes.dll" ^
     /out:"dist\Eco Mode.exe" src\GpuModeSwitch.cs
 if errorlevel 1 exit /b 1
 

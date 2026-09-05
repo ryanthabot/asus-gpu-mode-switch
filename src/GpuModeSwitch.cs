@@ -1,18 +1,21 @@
-//  GpuModeSwitch.cs  (v1.0.10)
+//  GpuModeSwitch.cs  (v1.0.11)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
 //
-//  v1.0.10 changes:
-//    - Windows 11 Energy Saver is now synced with the GPU mode: Eco Mode turns
-//      Energy Saver ON, Go Time turns it OFF. Implemented via the same
-//      registry value the Quick Settings tile writes
-//      (HKLM\SYSTEM\CurrentControlSet\Control\Power\EnergySaverState:
-//       1 = on, 2 = off - there is no documented instant-toggle API). Every
-//      read, write and read-back is logged; a failure never blocks the GPU
-//      switch and is surfaced in the result text.
-//    - --status and the confirm pre-check now report the Energy Saver state.
+//  v1.0.11 changes:
+//    - Energy Saver toggle redone: the EnergySaverState registry value is
+//      only a mirror of the state (writing it does not engage Energy Saver).
+//      The apps now toggle the real Quick Settings tile via UI Automation
+//      (Win+A -> toggle "Energy saver" -> read back its state -> Esc), which
+//      is the same switch the user would press manually. The registry value
+//      is still written as the persisted intent, and every step is logged.
+//
+//  v1.0.10: Windows 11 Energy Saver sync added. v1.0.9: one-click default.
+//  v1.0.8: themed UI. v1.0.7: taskbar presence. v1.0.6: icons.
+//  v1.0.5: bare-zero DSTS fix. v1.0.4: live toggle first. v1.0.3: live
+//  switching via NV service. v1.0.2: logging. v1.0.1: ATKACPI transport.
 //
 //  v1.0.7: main + log windows appear on the taskbar with the app icon.
 //  v1.0.6: application icons. v1.0.5: bare-zero DSTS = device not implemented.
@@ -45,13 +48,14 @@ using System.ServiceProcess;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+using System.Windows.Automation;
 using Microsoft.Win32;
 
 namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.10";
+        public const string Version = "1.0.11";
 
         [STAThread]
         private static void Main(string[] args)
@@ -568,8 +572,8 @@ namespace GpuModeSwitch
                 s += ", MUX " + (mux == 1 ? "hybrid" : mux == 0 ? "dGPU-direct" : "unknown");
             }
             s += ".\nTarget: " + (eco ? "Eco Mode (dGPU off)" : "Standard mode (dGPU on)") + ".";
-            bool? es = EnergySaver.Get();
-            s += "\nWindows Energy Saver: " + (es == null ? "unknown" : (es == true ? "on" : "off")) + ".";
+            bool? es = EnergySaver.GetSavedState();
+            s += "\nWindows Energy Saver (saved state): " + (es == null ? "unknown" : (es == true ? "on" : "off")) + ".";
             if (gpu == (eco ? 1 : 0))
             {
                 s += "\nAlready in the target mode - Apply will simply confirm it.";
@@ -605,13 +609,12 @@ namespace GpuModeSwitch
                 o.Changed = false;
                 o.Headline = eco ? "Already in Eco Mode" : "Already in Standard mode";
                 // Still sync Energy Saver with the mode - that's part of the deal.
-                Logger.Line("Windows Energy Saver: setting " + (eco ? "ON" : "OFF"));
-                bool esOk = EnergySaver.Set(eco);
+                bool esApplied = EnergySaver.Sync(eco);
                 o.Detail = "Nothing needed changing.\nCurrent state: dGPU " + (eco ? "off" : "on") +
                            ", hybrid display path.\n" +
-                           (esOk
+                           (esApplied
                                ? "Windows Energy Saver: " + (eco ? "on." : "off.")
-                               : "Note: Windows Energy Saver could not be changed - see View log.");
+                               : "Note: Windows Energy Saver could not be toggled - see View log.");
                 Logger.Line("No change needed - already in target mode.");
                 return o;
             }
@@ -706,11 +709,10 @@ namespace GpuModeSwitch
                   "finalizes if anything looks off.";
 
             // Sync Windows 11 Energy Saver with the mode (Eco -> on, Standard -> off).
-            Logger.Line("Windows Energy Saver: setting " + (eco ? "ON" : "OFF"));
-            bool esApplied = EnergySaver.Set(eco);
-            o.Detail += esApplied
+            bool esSynced = EnergySaver.Sync(eco);
+            o.Detail += esSynced
                 ? "\nWindows Energy Saver: turned " + (eco ? "on." : "off.")
-                : "\nNote: Windows Energy Saver could not be changed - see View log.";
+                : "\nNote: Windows Energy Saver could not be toggled - see View log.";
             Logger.Line("Switch complete (applied live, no restart required).");
             return o;
         }
@@ -738,8 +740,8 @@ namespace GpuModeSwitch
             {
                 s += "GPU MUX: not available on this model\n";
             }
-            bool? es = EnergySaver.Get();
-            s += "Windows Energy Saver: " + (es == null ? "unknown" : (es == true ? "on" : "off")) + "\n";
+            bool? es = EnergySaver.GetSavedState();
+            s += "Windows Energy Saver (saved state): " + (es == null ? "unknown" : (es == true ? "on" : "off")) + "\n";
 
 #if MODE_ECO
             s += "\nThis app switches to: ECO (dGPU off)";
@@ -868,18 +870,27 @@ namespace GpuModeSwitch
 
     // ---------------------------------------------------------------------
     // Windows 11 Energy Saver instant toggle. There is no documented API for
-    // the "Turn on now" switch (even G-Helper lacks it), but the Quick
-    // Settings tile writes this registry value and the power service honors
-    // it live: 1 = energy saver on, 2 = off. Best-effort + fully logged; a
-    // failure never blocks the GPU switch.
+    // the "Turn on now" switch, and the EnergySaverState registry value is
+    // only a mirror the power service writes (writing it does nothing live).
+    // So the apps drive the real Quick Settings tile through UI Automation:
+    // Win+A opens the panel, the "Energy saver" toggle is pressed if its
+    // state differs from the target, its new state is read back as proof,
+    // and Esc closes the panel. The registry value is additionally written
+    // as the persisted intent. Best-effort + fully logged; a failure never
+    // blocks the GPU switch.
     // ---------------------------------------------------------------------
     internal static class EnergySaver
     {
         private const string KeyPath = @"SYSTEM\CurrentControlSet\Control\Power";
         private const string ValueName = "EnergySaverState";
 
+        [DllImport("user32.dll")]
+        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+        private const uint KEYEVENTF_KEYUP = 0x0002;
+
         // true = on, false = off, null = unknown / not present
-        public static bool? Get()
+        public static bool? GetSavedState()
         {
             try
             {
@@ -897,9 +908,9 @@ namespace GpuModeSwitch
                         return null;
                     }
                     int i = Convert.ToInt32(v);
-                    if (i == 1) { Logger.Line("EnergySaver: read state=1 (on)"); return true; }
-                    if (i == 2) { Logger.Line("EnergySaver: read state=2 (off)"); return false; }
-                    Logger.Line("EnergySaver: read state=" + i + " (unrecognized)");
+                    if (i == 1) { Logger.Line("EnergySaver: saved state=1 (on)"); return true; }
+                    if (i == 2) { Logger.Line("EnergySaver: saved state=2 (off)"); return false; }
+                    Logger.Line("EnergySaver: saved state=" + i + " (unrecognized)");
                     return null;
                 }
             }
@@ -910,7 +921,8 @@ namespace GpuModeSwitch
             }
         }
 
-        public static bool Set(bool on)
+        // Persisted intent: honored at boot even if the live toggle fails.
+        private static void WriteSavedState(bool on)
         {
             int v = on ? 1 : 2;
             try
@@ -919,25 +931,150 @@ namespace GpuModeSwitch
                 {
                     if (k == null)
                     {
-                        Logger.Line("EnergySaver: write failed - Control\\Power key missing");
-                        return false;
+                        Logger.Line("EnergySaver: registry write failed - key missing");
+                        return;
                     }
                     k.SetValue(ValueName, v, RegistryValueKind.DWord);
-                    Logger.Line("EnergySaver: state written = " + v + " (" + (on ? "ON" : "OFF") + ")");
+                    Logger.Line("EnergySaver: persisted state = " + v + " (" + (on ? "ON" : "OFF") + ")");
                 }
             }
             catch (Exception ex)
             {
-                Logger.Line("EnergySaver: write failed - " + ex.Message);
+                Logger.Line("EnergySaver: registry write failed - " + ex.Message);
+            }
+        }
+
+        // Full sync: persisted intent + live toggle of the Quick Settings tile.
+        // Returns true when the live tile state was verified to match.
+        public static bool Sync(bool on)
+        {
+            WriteSavedState(on);
+
+            Logger.Line("EnergySaver: opening Quick Settings (Win+A) for live toggle to " + (on ? "ON" : "OFF"));
+            keybd_event(0x5B, 0, 0, UIntPtr.Zero);              // LWIN down
+            keybd_event(0x41, 0, 0, UIntPtr.Zero);              // 'A' down
+            keybd_event(0x41, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            keybd_event(0x5B, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+
+            AutomationElement tile = null;
+            for (int attempt = 0; attempt < 3 && tile == null; attempt++)
+            {
+                Thread.Sleep(attempt == 0 ? 700 : 400);
+                tile = FindEnergySaverTile();
+            }
+
+            if (tile == null)
+            {
+                Logger.Line("EnergySaver: 'Energy saver' tile not found via UI Automation " +
+                            "(non-English UI or panel blocked). Saved state still applies at next boot.");
+                SendEsc();
                 return false;
             }
 
-            bool? back = Get();
-            bool ok = back == (bool?)on;
-            Logger.Line("EnergySaver: read-back " +
-                (back == null ? "unknown" : (back == true ? "ON" : "OFF")) +
-                (ok ? " (verified)" : " (MISMATCH)"));
+            ToggleState before = GetToggleState(tile);
+            Logger.Line("EnergySaver: tile found, current state = " + before);
+            if ((before == ToggleState.On) == on)
+            {
+                Logger.Line("EnergySaver: tile already " + (on ? "ON" : "OFF") + " - no press needed");
+                SendEsc();
+                return true;
+            }
+
+            try
+            {
+                object pat;
+                if (tile.TryGetCurrentPattern(TogglePattern.Pattern, out pat))
+                {
+                    ((TogglePattern)pat).Toggle();
+                }
+                else
+                {
+                    Logger.Line("EnergySaver: tile has no TogglePattern");
+                    SendEsc();
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Line("EnergySaver: toggle failed - " + ex.Message);
+                SendEsc();
+                return false;
+            }
+
+            Thread.Sleep(500);
+            ToggleState after = GetToggleState(tile);
+            bool ok = (after == ToggleState.On) == on;
+            Logger.Line("EnergySaver: tile state after press = " + after + (ok ? " (verified)" : " (MISMATCH)"));
+            SendEsc();
             return ok;
+        }
+
+        // Searches top-level windows (shell panels first) for the toggle named
+        // "Energy saver". The English UI name is expected.
+        private static AutomationElement FindEnergySaverTile()
+        {
+            Condition cond = new AndCondition(
+                new PropertyCondition(AutomationElement.NameProperty, "Energy saver"),
+                new PropertyCondition(AutomationElement.IsTogglePatternAvailableProperty, true));
+
+            AutomationElementCollection tops =
+                AutomationElement.RootElement.FindAll(TreeScope.Children, Condition.TrueCondition);
+
+            foreach (AutomationElement w in tops)
+            {
+                string cls = "";
+                try { cls = w.Current.ClassName ?? ""; } catch { }
+                string l = cls.ToLowerInvariant();
+                if (l.Contains("shell") || l.Contains("xaml") || l.Contains("quick"))
+                {
+                    try
+                    {
+                        AutomationElement t = w.FindFirst(TreeScope.Descendants, cond);
+                        if (t != null) return t;
+                    }
+                    catch { }
+                }
+            }
+
+            foreach (AutomationElement w in tops)
+            {
+                try
+                {
+                    AutomationElement t = w.FindFirst(TreeScope.Descendants, cond);
+                    if (t != null) return t;
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        private static ToggleState GetToggleState(AutomationElement el)
+        {
+            try
+            {
+                object pat;
+                if (el.TryGetCurrentPattern(TogglePattern.Pattern, out pat))
+                {
+                    return ((TogglePattern)pat).Current.ToggleState;
+                }
+            }
+            catch { }
+            return ToggleState.Indeterminate;
+        }
+
+        private static void ToggleIt(AutomationElement el)
+        {
+            object pat;
+            if (el.TryGetCurrentPattern(TogglePattern.Pattern, out pat))
+            {
+                ((TogglePattern)pat).Toggle();
+            }
+        }
+
+        private static void SendEsc()
+        {
+            keybd_event(0x1B, 0, 0, UIntPtr.Zero);              // ESC down
+            keybd_event(0x1B, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         }
     }
 

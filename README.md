@@ -9,14 +9,20 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.13** — **honest Energy Saver status handling**: on the newest
+> Windows 11 builds (24H2+/26200+, where Energy Saver moved to the `whesvc`
+> service), the legacy Energy Saver threshold setting is no longer exposed
+> via the power API — the write returns "not found" and the app now says so
+> explicitly in the result window and log ("not controllable via the power
+> API on this Windows build"), instead of a generic failure. On builds/models
+> that still expose the setting, the v1.0.12 threshold mechanism (100%/0%)
+> works unchanged. The NV driver service stop/restart is also more patient
+> (15s) and a stop-timeout is clearly logged as non-fatal.
+>
 > **v1.0.12** — **Energy Saver now uses the documented power setting** (no
 > more Quick Settings popup): Eco Mode sets the Energy Saver battery threshold
 > to **100%** (Energy Saver always engages when on battery) and Go Time sets
-> it to **0%** (never auto-engages). Written via
-> `PowerWriteDCValueIndex` on the active scheme and applied immediately with
-> `PowerSetActiveScheme`. The current threshold is shown in `--status`, and
-> every return code and read-back is logged. The Quick Settings UI
-> automation from v1.0.11 was removed.
+> it to **0%** (never auto-engages).
 >
 > **v1.0.11** — Energy Saver toggle via Quick Settings UI Automation
 > (removed in v1.0.12; the tile could not be located reliably and the

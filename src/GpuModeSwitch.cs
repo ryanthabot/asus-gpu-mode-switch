@@ -1,27 +1,22 @@
-//  GpuModeSwitch.cs  (v1.0.12)
+//  GpuModeSwitch.cs  (v1.0.13)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
 //
-//  v1.0.12 changes:
-//    - Energy Saver: the Quick Settings UI automation is gone (no panel
-//      popup). Energy Saver is now driven through the documented hidden
-//      power setting instead: subgroup SUB_ENERGYSAVER
-//      (de830923-a562-41af-a086-e3a2c6bad2da), setting ESBATTTHRESHOLD
-//      (e69653ca-cf6f-4166-b25a-4d6a2c1b4e7f).
-//        Eco Mode  -> threshold 100% : Energy Saver always on (on battery),
-//        Go Time   -> threshold 0%   : Energy Saver never auto-engages.
-//      Written with PowerWriteDCValueIndex on the active scheme and applied
-//      immediately with PowerSetActiveScheme. Every return code and
-//      read-back is logged. The EnergySaverState registry value is still
-//      written as the persisted intent.
-//
-//  v1.0.11: ES toggle attempt via Quick Settings UIA (removed here).
-//  v1.0.10: ES sync added. v1.0.9: one-click default. v1.0.8: themed UI.
-//  v1.0.7: taskbar presence. v1.0.6: icons. v1.0.5: bare-zero DSTS fix.
-//  v1.0.4: live toggle first. v1.0.3: live switching via NV service.
-//  v1.0.2: logging. v1.0.1: ATKACPI transport.
+//  v1.0.13 changes:
+//    - NV driver service stop/restart made more patient (15s) and clearly
+//      logged when a stop times out (it is non-fatal - verified in the field
+//      that the eco write can succeed anyway).
+//    - Energy Saver: when the power API rejects the threshold write with
+//      rc=2 (ERROR_FILE_NOT_FOUND - this Windows build does not expose the
+//      setting, e.g. 26200+ where ES moved to the whesvc service), the log
+//      and result text say so explicitly instead of a generic failure.
+//      Reality check: Windows 11 currently exposes NO documented way to
+//      toggle the instant Energy Saver state programmatically (the
+//      EnergySaverState registry value is a mirror, and the legacy threshold
+//      setting is gone on the newest builds). The write is still attempted
+//      because it works on builds/models that still expose the setting.
 //
 //  v1.0.7: main + log windows appear on the taskbar with the app icon.
 //  v1.0.6: application icons. v1.0.5: bare-zero DSTS = device not implemented.
@@ -60,7 +55,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.12";
+        public const string Version = "1.0.13";
 
         [STAThread]
         private static void Main(string[] args)
@@ -619,7 +614,7 @@ namespace GpuModeSwitch
                            ", hybrid display path.\n" +
                            (esApplied
                                ? "Windows Energy Saver auto threshold: " + (eco ? "100% (always on when on battery)." : "disabled.")
-                               : "Note: Windows Energy Saver could not be changed - see View log.");
+                               : "Note: Windows Energy Saver is not controllable via the power API on this\nWindows build - see View log.");
                 Logger.Line("No change needed - already in target mode.");
                 return o;
             }
@@ -717,7 +712,7 @@ namespace GpuModeSwitch
             bool esSynced = EnergySaver.Sync(eco);
             o.Detail += esSynced
                 ? "\nWindows Energy Saver auto threshold: " + (eco ? "100% (always on when on battery)." : "disabled.")
-                : "\nNote: Windows Energy Saver could not be changed - see View log.";
+                : "\nNote: Windows Energy Saver is not controllable via the power API on this Windows\nbuild (it moved to the whesvc service on 24H2+/26200+). Toggle it manually via\nQuick Settings (Win+A) if wanted. See View log for details.";
             Logger.Line("Switch complete (applied live, no restart required).");
             return o;
         }
@@ -806,13 +801,20 @@ namespace GpuModeSwitch
                 {
                     using (ServiceController sc = new ServiceController(n))
                     {
-                        if (sc.Status == ServiceControllerStatus.Running ||
-                            sc.Status == ServiceControllerStatus.StartPending)
+                    if (sc.Status == ServiceControllerStatus.Running ||
+                        sc.Status == ServiceControllerStatus.StartPending)
+                    {
+                        sc.Stop();
+                        try
                         {
-                            sc.Stop();
-                            sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
+                            sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
                             Logger.Line("NV service stopped: " + n);
                         }
+                        catch (System.ServiceProcess.TimeoutException)
+                        {
+                            Logger.Line("NV service stop timed out after 15s (" + n + ") - continuing, non-fatal");
+                        }
+                    }
                         else
                         {
                             Logger.Line("NV service already " + sc.Status + ": " + n);
@@ -841,8 +843,15 @@ namespace GpuModeSwitch
                             sc.Status == ServiceControllerStatus.StartPending)
                         {
                             sc.Stop();
-                            sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
-                            Logger.Line("NV service stopped for restart: " + n);
+                            try
+                            {
+                                sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
+                                Logger.Line("NV service stopped for restart: " + n);
+                            }
+                            catch (System.ServiceProcess.TimeoutException)
+                            {
+                                Logger.Line("NV service stop timed out (" + n + ") - attempting start anyway");
+                            }
                         }
                         sc.Start();
                         sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
@@ -989,6 +998,12 @@ namespace GpuModeSwitch
 
                 rc = PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, percent);
                 Logger.Line("EnergySaver: PowerWriteDCValueIndex rc=" + rc + " (0 = OK)");
+                if (rc == 2)
+                {
+                    Logger.Line("EnergySaver: rc=2 (ERROR_FILE_NOT_FOUND) - this Windows build does not " +
+                                "expose the Energy Saver threshold via the legacy power API " +
+                                "(ES moved to the whesvc service on 24H2+/26200+).");
+                }
                 if (rc != 0) return false;
 
                 uint readBack = 0xFFFFFFFF;

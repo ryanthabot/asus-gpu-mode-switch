@@ -1,22 +1,21 @@
-//  GpuModeSwitch.cs  (v1.0.13)
+//  GpuModeSwitch.cs  (v1.0.14)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
 //
-//  v1.0.13 changes:
-//    - NV driver service stop/restart made more patient (15s) and clearly
-//      logged when a stop times out (it is non-fatal - verified in the field
-//      that the eco write can succeed anyway).
-//    - Energy Saver: when the power API rejects the threshold write with
-//      rc=2 (ERROR_FILE_NOT_FOUND - this Windows build does not expose the
-//      setting, e.g. 26200+ where ES moved to the whesvc service), the log
-//      and result text say so explicitly instead of a generic failure.
-//      Reality check: Windows 11 currently exposes NO documented way to
-//      toggle the instant Energy Saver state programmatically (the
-//      EnergySaverState registry value is a mirror, and the legacy threshold
-//      setting is gone on the newest builds). The write is still attempted
-//      because it works on builds/models that still expose the setting.
+//  v1.0.14 changes:
+//    - Power Mode overlay switching added. On build 26200+ the Energy Saver
+//      tile has no programmatic surface at all (verified via remote dump:
+//      no ES subgroup exists in powercfg), but the Windows 11 Power Mode
+//      slider IS exposed: subgroup c763b4ec-0e50-4b6b-9bed-2b92a6ee884e,
+//      setting 7ec1751b-60ed-4588-afb5-9819d3d77d90
+//      (0 = Battery saver / best efficiency, 3 = Best performance).
+//        Eco Mode  -> dGPU off + Power Mode "Battery saver" (AC + battery)
+//        Go Time   -> dGPU on  + Power Mode "Best performance"
+//      Verified working remotely over SSH on the G513QR. The Energy Saver
+//      threshold attempt (works on older builds) and the EnergySaverState
+//      registry intent are still applied quietly.
 //
 //  v1.0.7: main + log windows appear on the taskbar with the app icon.
 //  v1.0.6: application icons. v1.0.5: bare-zero DSTS = device not implemented.
@@ -55,7 +54,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.13";
+        public const string Version = "1.0.14";
 
         [STAThread]
         private static void Main(string[] args)
@@ -608,13 +607,17 @@ namespace GpuModeSwitch
                 o.Ok = true;
                 o.Changed = false;
                 o.Headline = eco ? "Already in Eco Mode" : "Already in Standard mode";
-                // Still sync Energy Saver with the mode - that's part of the deal.
+                // Still sync Power Mode + Energy Saver with the mode.
+                bool pmOk = EnergySaver.ApplyPowerModeOverlay(eco ? 0u : 3u);
                 bool esApplied = EnergySaver.Sync(eco);
                 o.Detail = "Nothing needed changing.\nCurrent state: dGPU " + (eco ? "off" : "on") +
                            ", hybrid display path.\n" +
+                           (pmOk
+                               ? "Power Mode: " + (eco ? "Battery saver (best efficiency)." : "Best performance.") + "\n"
+                               : "") +
                            (esApplied
                                ? "Windows Energy Saver auto threshold: " + (eco ? "100% (always on when on battery)." : "disabled.")
-                               : "Note: Windows Energy Saver is not controllable via the power API on this\nWindows build - see View log.");
+                               : "Note: Windows Energy Saver could not be changed - see View log.");
                 Logger.Line("No change needed - already in target mode.");
                 return o;
             }
@@ -708,11 +711,18 @@ namespace GpuModeSwitch
                   "Give it a few seconds if it is still re-enumerating; a restart\n" +
                   "finalizes if anything looks off.";
 
-            // Sync Windows 11 Energy Saver with the mode (Eco -> on, Standard -> off).
+            // Sync the Power Mode overlay (works on all builds) and the Energy
+            // Saver threshold (older builds) with the mode.
+            Logger.Line("Power Mode overlay: setting " + (eco ? "0 (Battery saver / best efficiency)" : "3 (Best performance)"));
+            bool pmSynced = EnergySaver.ApplyPowerModeOverlay(eco ? 0u : 3u);
             bool esSynced = EnergySaver.Sync(eco);
+
+            o.Detail += pmSynced
+                ? "\nPower Mode: " + (eco ? "Battery saver (best efficiency)." : "Best performance.")
+                : "\nNote: Power Mode could not be changed - see View log.";
             o.Detail += esSynced
                 ? "\nWindows Energy Saver auto threshold: " + (eco ? "100% (always on when on battery)." : "disabled.")
-                : "\nNote: Windows Energy Saver is not controllable via the power API on this Windows\nbuild (it moved to the whesvc service on 24H2+/26200+). Toggle it manually via\nQuick Settings (Win+A) if wanted. See View log for details.";
+                : "";
             Logger.Line("Switch complete (applied live, no restart required).");
             return o;
         }
@@ -902,6 +912,17 @@ namespace GpuModeSwitch
         private static readonly Guid SubEnergySaver = new Guid("DE830923-A562-41AF-A086-E3A2C6BAD2DA"); // SUB_ENERGYSAVER
         private static readonly Guid EsBattThreshold = new Guid("E69653CA-CF6F-4166-B25A-4D6A2C1B4E7F"); // ESBATTTHRESHOLD
 
+        // Windows 11 Power Mode overlay (the Settings "Power mode" slider).
+        // Index 0 = Battery saver / best efficiency ... 3 = Best performance.
+        private static readonly Guid SubPowerModeOverlay = new Guid("C763B4EC-0E50-4B6B-9BED-2B92A6EE884E");
+        private static readonly Guid SettingOverlay = new Guid("7EC1751B-60ED-4588-AFB5-9819D3D77D90");
+
+        [DllImport("powrprof.dll")]
+        private static extern uint PowerReadACValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroupOfPowerSettingsGuid, ref Guid PowerSettingGuid, ref uint AcValueIndex);
+
+        [DllImport("powrprof.dll")]
+        private static extern uint PowerWriteACValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroupOfPowerSettingsGuid, ref Guid PowerSettingGuid, uint AcValueIndex);
+
         [DllImport("powrprof.dll")]
         private static extern uint PowerGetActiveScheme(IntPtr UserRootPowerKey, out IntPtr ActivePolicyGuid);
 
@@ -1019,6 +1040,52 @@ namespace GpuModeSwitch
             catch (Exception ex)
             {
                 Logger.Line("EnergySaver: threshold write failed - " + ex.Message);
+                return false;
+            }
+        }
+
+        // Windows 11 Power Mode overlay: 0 = Battery saver (best efficiency),
+        // 1 = Better battery, 2 = Better performance, 3 = Best performance.
+        // Written to both AC and battery, applied immediately. This is the
+        // power-saving lever that build 26200+ still exposes.
+        public static bool ApplyPowerModeOverlay(uint index)
+        {
+            try
+            {
+                IntPtr p;
+                uint rc = PowerGetActiveScheme(IntPtr.Zero, out p);
+                if (rc != 0)
+                {
+                    Logger.Line("PowerMode: PowerGetActiveScheme rc=" + rc);
+                    return false;
+                }
+                Guid scheme = (Guid)Marshal.PtrToStructure(p, typeof(Guid));
+                Marshal.FreeCoTaskMem(p);
+
+                Guid sub = SubPowerModeOverlay;
+                Guid set = SettingOverlay;
+
+                rc = PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, index);
+                Logger.Line("PowerMode: PowerWriteACValueIndex " + index + " rc=" + rc + " (0 = OK)");
+                if (rc != 0) return false;
+
+                rc = PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, index);
+                Logger.Line("PowerMode: PowerWriteDCValueIndex " + index + " rc=" + rc + " (0 = OK)");
+                if (rc != 0) return false;
+
+                rc = PowerSetActiveScheme(IntPtr.Zero, ref scheme);   // apply now
+                Logger.Line("PowerMode: PowerSetActiveScheme rc=" + rc + " (0 = OK)");
+
+                uint acCheck = 0xFFFFFFFF, dcCheck = 0xFFFFFFFF;
+                PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, ref acCheck);
+                PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, ref dcCheck);
+                bool ok = acCheck == index && dcCheck == index;
+                Logger.Line("PowerMode: read-back AC=" + acCheck + " DC=" + dcCheck + (ok ? " (verified)" : " (MISMATCH)"));
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                Logger.Line("PowerMode: overlay write failed - " + ex.Message);
                 return false;
             }
         }

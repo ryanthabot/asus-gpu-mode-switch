@@ -9,6 +9,14 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.14** — **Power Mode switching added** (the power-saving lever that
+> build 26200+ still exposes): **Eco Mode** sets the Windows 11 Power Mode to
+> **Battery saver** (best efficiency) on both AC and battery; **Go Time** sets
+> it to **Best performance**. Written via `PowerWriteAC/DCValueIndex` +
+> `PowerSetActiveScheme`, effective immediately, no popup. The Energy Saver
+> threshold attempt and registry intent are still applied quietly (they work
+> on older Windows builds).
+>
 > **v1.0.13** — **honest Energy Saver status handling**: on the newest
 > Windows 11 builds (24H2+/26200+, where Energy Saver moved to the `whesvc`
 > service), the legacy Energy Saver threshold setting is no longer exposed

@@ -9,14 +9,18 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
-> **v1.0.11** — **Energy Saver toggle fixed**: writing the `EnergySaverState`
-> registry value turned out to only mirror the state — the power service never
-> acted on it. The apps now toggle the *real* Quick Settings tile via UI
-> Automation (Win+A → press "Energy saver" → read its state back as proof →
-> Esc), which is exactly the switch a user would press. The registry value is
-> still written as the persisted intent, and every step (tile found, state
-> before/after, verification) is logged. Best-effort: a failure never blocks
-> the GPU switch.
+> **v1.0.12** — **Energy Saver now uses the documented power setting** (no
+> more Quick Settings popup): Eco Mode sets the Energy Saver battery threshold
+> to **100%** (Energy Saver always engages when on battery) and Go Time sets
+> it to **0%** (never auto-engages). Written via
+> `PowerWriteDCValueIndex` on the active scheme and applied immediately with
+> `PowerSetActiveScheme`. The current threshold is shown in `--status`, and
+> every return code and read-back is logged. The Quick Settings UI
+> automation from v1.0.11 was removed.
+>
+> **v1.0.11** — Energy Saver toggle via Quick Settings UI Automation
+> (removed in v1.0.12; the tile could not be located reliably and the
+> popup was unwanted).
 >
 > **v1.0.10** — **Windows 11 Energy Saver is now synced with the mode**: Eco
 > Mode turns Energy Saver **on**, Go Time turns it **off**.

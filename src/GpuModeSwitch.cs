@@ -1,8 +1,16 @@
-//  GpuModeSwitch.cs  (v1.0.17)
+//  GpuModeSwitch.cs  (v1.0.18)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
+//
+//  v1.0.18 changes (Go Time tray picker):
+//    - Watchdog handling: apps like Parsec are relaunched by their own
+//      Windows service the moment they are killed. The picker now discovers
+//      matching services by scanning the Services registry for binaries
+//      whose path contains the app's process names, stops them first, then
+//      kills processes - retrying up to 3 rounds with a re-check after each.
+//      A final result line reports whether the app stayed closed.
 //
 //  v1.0.17 changes (Go Time only):
 //    - Tray app picker: after the switch completes, Go Time scans for known
@@ -76,7 +84,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.17";
+        public const string Version = "1.0.18";
 
         [STAThread]
         private static void Main(string[] args)
@@ -1689,10 +1697,105 @@ namespace GpuModeSwitch
             }
         }
 
-        // Graceful window close first, then kill. For Vanguard the vgc
-        // user-mode service stop is also attempted.
-        public static int Close(TrayAppInfo app)
+        // Full close: stop any watchdog service whose binary matches the app
+        // (Parsec's pservice relaunches parsecd on kill), kill the processes,
+        // and re-check up to 3 rounds - refreshing the running state each time.
+        public static void Close(TrayAppInfo app)
         {
+            List<string> services = FindMatchingServices(app);
+
+            for (int round = 1; round <= 3; round++)
+            {
+                Logger.Line("TrayApps: close attempt " + round + "/3 for " + app.Label);
+
+                foreach (string s in services)
+                {
+                    try
+                    {
+                        using (ServiceController sc = new ServiceController(s))
+                        {
+                            if (sc.Status == ServiceControllerStatus.Running ||
+                                sc.Status == ServiceControllerStatus.StartPending)
+                            {
+                                sc.Stop();
+                                try
+                                {
+                                    sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
+                                    Logger.Line("TrayApps: stopped service " + s);
+                                }
+                                catch (System.ServiceProcess.TimeoutException)
+                                {
+                                    Logger.Line("TrayApps: service " + s + " stop timed out");
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Line("TrayApps: service " + s + " stop failed - " + ex.Message);
+                    }
+                }
+
+                KillMatching(app);
+                Thread.Sleep(1500);
+                Detect();
+                if (!app.Running)
+                {
+                    Logger.Line("TrayApps: " + app.Label + " fully closed");
+                    return;
+                }
+                Logger.Line("TrayApps: " + app.Label + " still running - retrying");
+            }
+
+            Logger.Line("TrayApps: " + app.Label + " could not be fully closed - its watchdog may keep restarting it");
+        }
+
+        // Scan the Services registry for services whose ImagePath contains one
+        // of the app's process-name candidates (e.g. Parsec's pservice.exe).
+        private static List<string> FindMatchingServices(TrayAppInfo app)
+        {
+            List<string> found = new List<string>();
+            try
+            {
+                using (RegistryKey services = Registry.LocalMachine.OpenSubKey(
+                    @"SYSTEM\CurrentControlSet\Services"))
+                {
+                    if (services == null) return found;
+                    foreach (string name in services.GetSubKeyNames())
+                    {
+                        try
+                        {
+                            using (RegistryKey k = services.OpenSubKey(name))
+                            {
+                                if (k == null) continue;
+                                object ip = k.GetValue("ImagePath");
+                                if (ip == null) continue;
+                                string path = ip.ToString().ToLowerInvariant();
+                                foreach (string cand in app.Candidates)
+                                {
+                                    if (cand.Length > 4 && path.Contains(cand))
+                                    {
+                                        found.Add(name);
+                                        Logger.Line("TrayApps: matched service '" + name + "' (" + path.Trim() + ")");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Line("TrayApps: service scan failed - " + ex.Message);
+            }
+            return found;
+        }
+
+        private static void KillMatching(TrayAppInfo app)
+        {
+            // graceful close first
             foreach (Process p in Process.GetProcesses())
             {
                 string pn = "";
@@ -1700,9 +1803,9 @@ namespace GpuModeSwitch
                 if (!Matches(pn, app)) continue;
                 try { p.CloseMainWindow(); } catch { }
             }
-            Thread.Sleep(1200);
+            Thread.Sleep(800);
 
-            int closed = 0;
+            // then kill survivors
             foreach (Process p in Process.GetProcesses())
             {
                 string pn = "";
@@ -1711,39 +1814,14 @@ namespace GpuModeSwitch
                 try
                 {
                     p.Kill();
-                    bool exited = p.WaitForExit(3000);
-                    if (exited) { closed++; Logger.Line("TrayApps: closed " + p.ProcessName); }
-                    else { Logger.Line("TrayApps: " + p.ProcessName + " did not exit in time"); }
+                    if (p.WaitForExit(3000)) Logger.Line("TrayApps: closed " + p.ProcessName);
+                    else Logger.Line("TrayApps: " + p.ProcessName + " did not exit in time");
                 }
                 catch (Exception ex)
                 {
                     Logger.Line("TrayApps: could not close " + p.ProcessName + " - " + ex.Message);
                 }
             }
-
-            if (app.Label.StartsWith("Vanguard"))
-            {
-                try
-                {
-                    using (ServiceController sc = new ServiceController("vgc"))
-                    {
-                        if (sc.Status == ServiceControllerStatus.Running)
-                        {
-                            sc.Stop();
-                            Logger.Line("TrayApps: Vanguard service (vgc) stop requested");
-                        }
-                        else
-                        {
-                            Logger.Line("TrayApps: Vanguard service (vgc) already " + sc.Status);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.Line("TrayApps: Vanguard service (vgc) stop failed - " + ex.Message);
-                }
-            }
-            return closed;
         }
     }
 #endif

@@ -9,6 +9,12 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.18** — **tray app close now handles watchdog services**: Parsec's
+> own Windows service was silently relaunching `parsecmd` after every kill.
+> The picker now discovers matching services from the Services registry,
+> stops them before killing, and re-checks up to 3 rounds — reporting in the
+> log whether the app stayed closed.
+>
 > **v1.0.17** — **Go Time tray app picker**: after the switch, Go Time scans
 > for known tray applications — **Parsec, Google Drive, Jellyfin, Riot Client
 > and Riot Vanguard** — and lists each with a checkbox. Tick the running ones

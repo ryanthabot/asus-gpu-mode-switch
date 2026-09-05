@@ -1,8 +1,17 @@
-//  GpuModeSwitch.cs  (v1.0.16)
+//  GpuModeSwitch.cs  (v1.0.17)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
+//
+//  v1.0.17 changes (Go Time only):
+//    - Tray app picker: after the switch completes, Go Time scans for known
+//      tray applications (Parsec, Google Drive, Jellyfin, Riot Client and
+//      Riot Vanguard) and shows a checkbox row for each detected one, with a
+//      "Close selected" button. Closing tries a graceful window close first,
+//      then kills; Vanguard's vgc service stop is also attempted. Detection
+//      matches running process names (contains for long names, exact for
+//      short ones like "vgc") and every action is logged.
 //
 //  v1.0.16 changes:
 //    - Layout fixes: window widened (560x400 default) with proper inner
@@ -67,7 +76,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.16";
+        public const string Version = "1.0.17";
 
         [STAThread]
         private static void Main(string[] args)
@@ -1613,6 +1622,132 @@ namespace GpuModeSwitch
         }
     }
 
+#if MODE_STANDARD
+    // ---------------------------------------------------------------------
+    // Known tray applications for the Go Time post-switch picker. Candidates
+    // are matched case-insensitively against running process names: contains
+    // for long names, exact for short ones (so "vgc" can't match randomly).
+    // ---------------------------------------------------------------------
+    internal class TrayAppInfo
+    {
+        public string Label;
+        public string[] Candidates;
+        public bool Running;
+    }
+
+    internal static class TrayApps
+    {
+        public static TrayAppInfo[] Known = new TrayAppInfo[]
+        {
+            new TrayAppInfo { Label = "Parsec",         Candidates = new string[] { "parsec" } },
+            new TrayAppInfo { Label = "Google Drive",   Candidates = new string[] { "googledrivefs", "googledrivesync" } },
+            new TrayAppInfo { Label = "Jellyfin",       Candidates = new string[] { "jellyfin" } },
+            new TrayAppInfo { Label = "Riot Client",    Candidates = new string[] { "riotclient" } },
+            new TrayAppInfo { Label = "Riot Vanguard",  Candidates = new string[] { "vgtray", "vgc" } },
+        };
+
+        private static bool Matches(string processName, TrayAppInfo app)
+        {
+            foreach (string cand in app.Candidates)
+            {
+                if (cand.Length <= 4)
+                {
+                    if (processName == cand) return true;
+                }
+                else if (processName.Contains(cand))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public static void Detect()
+        {
+            List<string> names = new List<string>();
+            foreach (Process p in Process.GetProcesses())
+            {
+                try { names.Add(p.ProcessName.ToLowerInvariant()); } catch { }
+                try { p.Dispose(); } catch { }
+            }
+            foreach (TrayAppInfo a in Known)
+            {
+                a.Running = false;
+                foreach (string pn in names)
+                {
+                    foreach (string cand in a.Candidates)
+                    {
+                        if (cand.Length <= 4 ? pn == cand : pn.Contains(cand))
+                        {
+                            a.Running = true;
+                            break;
+                        }
+                    }
+                    if (a.Running) break;
+                }
+                Logger.Line("TrayApps: " + a.Label + " " + (a.Running ? "running" : "not running"));
+            }
+        }
+
+        // Graceful window close first, then kill. For Vanguard the vgc
+        // user-mode service stop is also attempted.
+        public static int Close(TrayAppInfo app)
+        {
+            foreach (Process p in Process.GetProcesses())
+            {
+                string pn = "";
+                try { pn = p.ProcessName.ToLowerInvariant(); } catch { continue; }
+                if (!Matches(pn, app)) continue;
+                try { p.CloseMainWindow(); } catch { }
+            }
+            Thread.Sleep(1200);
+
+            int closed = 0;
+            foreach (Process p in Process.GetProcesses())
+            {
+                string pn = "";
+                try { pn = p.ProcessName.ToLowerInvariant(); } catch { continue; }
+                if (!Matches(pn, app)) continue;
+                try
+                {
+                    p.Kill();
+                    bool exited = p.WaitForExit(3000);
+                    if (exited) { closed++; Logger.Line("TrayApps: closed " + p.ProcessName); }
+                    else { Logger.Line("TrayApps: " + p.ProcessName + " did not exit in time"); }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Line("TrayApps: could not close " + p.ProcessName + " - " + ex.Message);
+                }
+            }
+
+            if (app.Label.StartsWith("Vanguard"))
+            {
+                try
+                {
+                    using (ServiceController sc = new ServiceController("vgc"))
+                    {
+                        if (sc.Status == ServiceControllerStatus.Running)
+                        {
+                            sc.Stop();
+                            Logger.Line("TrayApps: Vanguard service (vgc) stop requested");
+                        }
+                        else
+                        {
+                            Logger.Line("TrayApps: Vanguard service (vgc) already " + sc.Status);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Line("TrayApps: Vanguard service (vgc) stop failed - " + ex.Message);
+                }
+            }
+            return closed;
+        }
+    }
+#endif
+
     internal enum UiPhase
     {
         Probe,      // contacting hardware, shimmer on
@@ -1639,6 +1774,12 @@ namespace GpuModeSwitch
         private readonly bool _confirmMode;
         private UiPhase _phase = UiPhase.Probe;
         private SwitchOutcome _last;
+#if MODE_STANDARD
+        private readonly Label _trayTitle = new Label();
+        private readonly List<CheckBox> _trayBoxes = new List<CheckBox>();
+        private readonly Button _closeTray = new Button();
+        private bool _trayBusy;
+#endif
 
 #if MODE_ECO
         private const bool TargetEco = true;
@@ -1662,8 +1803,13 @@ namespace GpuModeSwitch
             MinimizeBox = false;
             ShowInTaskbar = true;
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(560, 400);
+#if MODE_STANDARD
+            ClientSize = new Size(560, 500);
+            MinimumSize = new Size(560, 500);
+#else
             ClientSize = new Size(560, 400);
+            MinimumSize = new Size(560, 400);
+#endif
             BackColor = Color.FromArgb(22, 22, 26);
             Font = new Font("Segoe UI", 9.5f);
             Opacity = 0;
@@ -1762,6 +1908,51 @@ namespace GpuModeSwitch
             _close.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             _close.Click += delegate { Close(); };
 
+#if MODE_STANDARD
+            _trayTitle.Text = "Tray apps detected:";
+            _trayTitle.ForeColor = Color.FromArgb(165, 165, 172);
+            _trayTitle.AutoSize = true;
+            _trayTitle.Location = new Point(24, 296);
+            _trayTitle.BackColor = Color.Transparent;
+            _trayTitle.Visible = false;
+
+            string[] trayLabels = { "Parsec", "Google Drive", "Jellyfin", "Riot Client", "Riot Vanguard" };
+            Point[] traySpots =
+            {
+                new Point(24, 324), new Point(300, 324),
+                new Point(24, 350), new Point(300, 350),
+                new Point(24, 376)
+            };
+            for (int i = 0; i < trayLabels.Length; i++)
+            {
+                CheckBox cb = new CheckBox();
+                cb.Text = trayLabels[i];
+                cb.AutoSize = true;
+                cb.Location = traySpots[i];
+                cb.ForeColor = Color.FromArgb(200, 200, 210);
+                cb.BackColor = Color.Transparent;
+                cb.Visible = false;
+                cb.Enabled = false;
+                _trayBoxes.Add(cb);
+                Controls.Add(cb);
+            }
+
+            _closeTray.Text = "Close selected";
+            _closeTray.FlatStyle = FlatStyle.Flat;
+            _closeTray.FlatAppearance.BorderColor = _accent;
+            _closeTray.ForeColor = Color.White;
+            _closeTray.BackColor = Color.FromArgb(42, 42, 49);
+            _closeTray.Size = new Size(150, 30);
+            _closeTray.Location = new Point(ClientSize.Width - 174, 370);
+            _closeTray.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _closeTray.TabStop = false;
+            _closeTray.Visible = false;
+            _closeTray.Click += delegate { BeginCloseTrayApps(); };
+
+            Controls.Add(_trayTitle);
+            Controls.Add(_closeTray);
+#endif
+
             Controls.AddRange(new Control[]
             {
                 _title, _subtitle, _x, _bar, _status, _detail,
@@ -1783,6 +1974,69 @@ namespace GpuModeSwitch
                 AsusControl.Shutdown();
             };
         }
+
+#if MODE_STANDARD
+        private void ShowTraySection()
+        {
+            _trayTitle.Visible = true;
+            _closeTray.Visible = true;
+            foreach (CheckBox cb in _trayBoxes)
+            {
+                cb.Visible = true;
+                cb.Text = "Scanning...";
+                cb.Checked = false;
+                cb.Enabled = false;
+            }
+            RunBg(delegate
+            {
+                TrayApps.Detect();
+                SafeInvoke(delegate { PopulateTrayRows(); });
+            });
+        }
+
+        private void PopulateTrayRows()
+        {
+            for (int i = 0; i < TrayApps.Known.Length && i < _trayBoxes.Count; i++)
+            {
+                TrayAppInfo a = TrayApps.Known[i];
+                _trayBoxes[i].Text = a.Label + (a.Running ? "  (running)" : "  (not running)");
+                _trayBoxes[i].Checked = a.Running;
+                _trayBoxes[i].Enabled = a.Running;
+            }
+        }
+
+        private void BeginCloseTrayApps()
+        {
+            if (_trayBusy) return;
+            List<TrayAppInfo> selected = new List<TrayAppInfo>();
+            for (int i = 0; i < TrayApps.Known.Length && i < _trayBoxes.Count; i++)
+            {
+                if (_trayBoxes[i].Checked && TrayApps.Known[i].Running) selected.Add(TrayApps.Known[i]);
+            }
+            if (selected.Count == 0) return;
+
+            _trayBusy = true;
+            _closeTray.Enabled = false;
+            Logger.Line("TrayApps: closing " + selected.Count + " selected app(s)");
+            RunBg(delegate
+            {
+                foreach (TrayAppInfo a in selected) TrayApps.Close(a);
+                TrayApps.Detect();
+                SafeInvoke(delegate
+                {
+                    for (int i = 0; i < TrayApps.Known.Length && i < _trayBoxes.Count; i++)
+                    {
+                        TrayAppInfo a = TrayApps.Known[i];
+                        _trayBoxes[i].Text = a.Label + (a.Running ? "  (running)" : "  (not running)");
+                        _trayBoxes[i].Checked = a.Running;
+                        _trayBoxes[i].Enabled = a.Running;
+                    }
+                    _trayBusy = false;
+                    _closeTray.Enabled = true;
+                });
+            });
+        }
+#endif
 
         private void InitButton(Button b, string text, int width, int x, int height)
         {
@@ -1974,6 +2228,9 @@ namespace GpuModeSwitch
             _logBtn.FlatAppearance.BorderColor = ok ? Color.FromArgb(90, 90, 98) : _accent;
             _close.Visible = true;
             if (r != null && r.Ok && r.NeedsRestart) _restart.Visible = true;
+#if MODE_STANDARD
+            ShowTraySection();
+#endif
         }
 
         // ---- plumbing ------------------------------------------------------

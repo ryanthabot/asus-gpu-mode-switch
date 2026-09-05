@@ -1,21 +1,24 @@
-//  GpuModeSwitch.cs  (v1.0.14)
+//  GpuModeSwitch.cs  (v1.0.15)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
 //
-//  v1.0.14 changes:
-//    - Power Mode overlay switching added. On build 26200+ the Energy Saver
-//      tile has no programmatic surface at all (verified via remote dump:
-//      no ES subgroup exists in powercfg), but the Windows 11 Power Mode
-//      slider IS exposed: subgroup c763b4ec-0e50-4b6b-9bed-2b92a6ee884e,
-//      setting 7ec1751b-60ed-4588-afb5-9819d3d77d90
-//      (0 = Battery saver / best efficiency, 3 = Best performance).
-//        Eco Mode  -> dGPU off + Power Mode "Battery saver" (AC + battery)
-//        Go Time   -> dGPU on  + Power Mode "Best performance"
-//      Verified working remotely over SSH on the G513QR. The Energy Saver
-//      threshold attempt (works on older builds) and the EnergySaverState
-//      registry intent are still applied quietly.
+//  v1.0.15 changes:
+//    - Energy Saver control that actually works on build 26200+: the app
+//      opens Settings > System > Power & battery > Energy saver via
+//      ms-settings:powersleep, expands the Energy saver card and toggles
+//      "Always use energy saver" through UI Automation (Eco = on, Go Time =
+//      off), then closes Settings. This switch persists across reboots and
+//      engages Energy Saver whenever the laptop runs on battery. The
+//      Settings window opens briefly while the toggle runs.
+//    - Game preparation: Go Time enables Windows Game Mode, turns on
+//      do-not-disturb (no toast popups mid-game) and pauses background
+//      services games don't need (SysMain, Windows Search, Print Spooler,
+//      DiagTrack). Eco Mode restores all of it. The power plan itself is
+//      never changed - it stays Balanced.
+//    - Power Mode overlay (v1.0.14) and the legacy threshold attempt remain
+//      as quiet secondary levers.
 //
 //  v1.0.7: main + log windows appear on the taskbar with the app icon.
 //  v1.0.6: application icons. v1.0.5: bare-zero DSTS = device not implemented.
@@ -48,13 +51,14 @@ using System.ServiceProcess;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+using System.Windows.Automation;
 using Microsoft.Win32;
 
 namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.14";
+        public const string Version = "1.0.15";
 
         [STAThread]
         private static void Main(string[] args)
@@ -616,8 +620,9 @@ namespace GpuModeSwitch
                                ? "Power Mode: " + (eco ? "Battery saver (best efficiency)." : "Best performance.") + "\n"
                                : "") +
                            (esApplied
-                               ? "Windows Energy Saver auto threshold: " + (eco ? "100% (always on when on battery)." : "disabled.")
-                               : "Note: Windows Energy Saver could not be changed - see View log.");
+                               ? "Windows Energy Saver: " + (eco ? "always on (on battery)." : "off.")
+                               : "Note: Windows Energy Saver could not be changed - see View log.") + "\n" +
+                           (eco ? GamePrep.ApplyForEco() : GamePrep.ApplyForGaming());
                 Logger.Line("No change needed - already in target mode.");
                 return o;
             }
@@ -721,8 +726,9 @@ namespace GpuModeSwitch
                 ? "\nPower Mode: " + (eco ? "Battery saver (best efficiency)." : "Best performance.")
                 : "\nNote: Power Mode could not be changed - see View log.";
             o.Detail += esSynced
-                ? "\nWindows Energy Saver auto threshold: " + (eco ? "100% (always on when on battery)." : "disabled.")
+                ? "\nWindows Energy Saver: " + (eco ? "always on (on battery)." : "off.")
                 : "";
+            o.Detail += "\n" + (eco ? GamePrep.ApplyForEco() : GamePrep.ApplyForGaming());
             Logger.Line("Switch complete (applied live, no restart required).");
             return o;
         }
@@ -876,6 +882,121 @@ namespace GpuModeSwitch
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Game preparation (Go Time) and restoration (Eco Mode). Go Time enables
+    // Windows Game Mode, turns on do-not-disturb and pauses background
+    // services games don't need; Eco Mode restores them. All best-effort and
+    // logged; failures never block the GPU switch. Stopped services also
+    // come back on their own at the next reboot.
+    // ---------------------------------------------------------------------
+    internal static class GamePrep
+    {
+        private static readonly string[] GamerServices = { "SysMain", "WSearch", "Spooler", "DiagTrack" };
+
+        private static void SetHkcuDword(string subKey, string valueName, int value)
+        {
+            try
+            {
+                using (RegistryKey k = Registry.CurrentUser.CreateSubKey(subKey))
+                {
+                    if (k == null) { Logger.Line("GamePrep: HKCU write failed - " + subKey); return; }
+                    k.SetValue(valueName, value, RegistryValueKind.DWord);
+                    Logger.Line("GamePrep: " + valueName + " = " + value);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Line("GamePrep: HKCU write failed - " + ex.Message);
+            }
+        }
+
+        // Go Time: game mode on, toasts off, background services paused.
+        public static string ApplyForGaming()
+        {
+            SetHkcuDword(@"Software\Microsoft\GameBar", "AutoGameModeEnabled", 1);
+            SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings", "NOC_GLOBAL_SETTING_TOASTS_ENABLED", 0);
+
+            int paused = 0;
+            foreach (string svc in GamerServices)
+            {
+                try
+                {
+                    using (ServiceController sc = new ServiceController(svc))
+                    {
+                        if (sc.Status == ServiceControllerStatus.Running ||
+                            sc.Status == ServiceControllerStatus.StartPending)
+                        {
+                            sc.Stop();
+                            try
+                            {
+                                sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
+                                paused++;
+                                Logger.Line("GamePrep: paused " + svc);
+                            }
+                            catch (System.ServiceProcess.TimeoutException)
+                            {
+                                Logger.Line("GamePrep: " + svc + " stop timed out - continuing");
+                            }
+                        }
+                        else
+                        {
+                            paused++;
+                            Logger.Line("GamePrep: " + svc + " already " + sc.Status);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Line("GamePrep: " + svc + " stop failed - " + ex.Message);
+                }
+            }
+            return "Game Mode on, do-not-disturb on, " + paused + "/" + GamerServices.Length +
+                   " background services paused.";
+        }
+
+        // Eco Mode: bring everything back.
+        public static string ApplyForEco()
+        {
+            SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings", "NOC_GLOBAL_SETTING_TOASTS_ENABLED", 1);
+
+            int running = 0;
+            foreach (string svc in GamerServices)
+            {
+                try
+                {
+                    using (ServiceController sc = new ServiceController(svc))
+                    {
+                        if (sc.Status == ServiceControllerStatus.Stopped ||
+                            sc.Status == ServiceControllerStatus.StopPending)
+                        {
+                            sc.Start();
+                            try
+                            {
+                                sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
+                                running++;
+                                Logger.Line("GamePrep: restarted " + svc);
+                            }
+                            catch (System.ServiceProcess.TimeoutException)
+                            {
+                                Logger.Line("GamePrep: " + svc + " start timed out - continuing");
+                            }
+                        }
+                        else
+                        {
+                            running++;
+                            Logger.Line("GamePrep: " + svc + " already " + sc.Status);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Line("GamePrep: " + svc + " start failed - " + ex.Message);
+                }
+            }
+            return "Toasts restored, " + running + "/" + GamerServices.Length + " background services running.";
+        }
+    }
+
     // Gives a form the executable's own icon (title bar / taskbar button).
     internal static class WindowIcons
     {
@@ -990,12 +1111,230 @@ namespace GpuModeSwitch
             }
         }
 
-        // Full sync: persisted intent + documented threshold on the active scheme.
-        // Returns true when the threshold was written and verified.
+        // Full sync: the "Always use energy saver" switch in Settings is the
+        // primary control (persists, works on 24H2+/26200+); the legacy
+        // threshold is a fallback for older builds.
         public static bool Sync(bool on)
         {
             WriteSavedState(on);
+            if (ToggleAlwaysUseEnergySaver(on)) return true;
+            Logger.Line("EnergySaver: Settings automation failed - trying legacy threshold fallback");
             return SetAutoThreshold(on ? 100u : 0u);
+        }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+
+        private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
+        private const uint MOUSEEVENTF_MOVE = 0x0001;
+        private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+        private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+
+        private static AutomationElement FindSettingsWindow()
+        {
+            AutomationElement root = AutomationElement.RootElement;
+            Condition cond = new PropertyCondition(AutomationElement.ClassNameProperty, "ApplicationFrameWindow");
+            AutomationElementCollection wins = root.FindAll(TreeScope.Children, cond);
+            foreach (AutomationElement w in wins)
+            {
+                string nm = "";
+                try { nm = w.Current.Name; } catch {}
+                if (nm != null && nm.Contains("Settings")) return w;
+            }
+            return null;
+        }
+
+        private static ToggleState GetToggleState(AutomationElement el)
+        {
+            try
+            {
+                object pat;
+                if (el.TryGetCurrentPattern(TogglePattern.Pattern, out pat))
+                {
+                    return ((TogglePattern)pat).Current.ToggleState;
+                }
+            }
+            catch { }
+            return ToggleState.Indeterminate;
+        }
+
+        private static AutomationElement FindToggleByName(AutomationElement parent, string name)
+        {
+            AutomationElementCollection els = parent.FindAll(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.NameProperty, name));
+            foreach (AutomationElement e in els)
+            {
+                try
+                {
+                    object pat;
+                    if (e.TryGetCurrentPattern(TogglePattern.Pattern, out pat)) return e;
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        private static void ClickCenter(System.Windows.Rect r)
+        {
+            int cx = (int)(r.X + r.Width / 2);
+            int cy = (int)(r.Y + r.Height / 2);
+            int sw = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width;
+            int sh = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height;
+            uint ax = (uint)Math.Round(cx * 65535.0 / sw);
+            uint ay = (uint)Math.Round(cy * 65535.0 / sh);
+            Logger.Line("EnergySaver: clicking " + cx + "," + cy);
+            mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, ax, ay, 0, UIntPtr.Zero);
+            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+        }
+
+        private static void CloseSettings(AutomationElement settings)
+        {
+            try
+            {
+                IntPtr hwnd = (IntPtr)settings.Current.NativeWindowHandle;
+                PostMessage(hwnd, 0x10, IntPtr.Zero, IntPtr.Zero);   // WM_CLOSE
+                Logger.Line("EnergySaver: Settings window closed");
+            }
+            catch { }
+        }
+
+        // Opens Settings > Power & battery, expands the Energy saver card and
+        // toggles "Always use energy saver" to the requested state via UI
+        // Automation. Works on 24H2+/26200+ where no power API exists.
+        public static bool ToggleAlwaysUseEnergySaver(bool on)
+        {
+            Logger.Line("EnergySaver: opening Settings > Power & battery > Energy saver");
+            try
+            {
+                Process.Start(new ProcessStartInfo("ms-settings:powersleep") { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                Logger.Line("EnergySaver: could not open Settings - " + ex.Message);
+                return false;
+            }
+
+            AutomationElement settings = null;
+            for (int i = 0; i < 15 && settings == null; i++)
+            {
+                Thread.Sleep(400);
+                settings = FindSettingsWindow();
+            }
+            if (settings == null)
+            {
+                Logger.Line("EnergySaver: Settings window never appeared");
+                return false;
+            }
+            Thread.Sleep(800);
+
+            // Expand the Energy saver card: find its own "Show more settings"
+            // button by position within the card rectangle.
+            AutomationElement esGroup = null;
+            System.Windows.Rect gRect = System.Windows.Rect.Empty;
+            AutomationElementCollection all = settings.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+            foreach (AutomationElement e in all)
+            {
+                string n = "";
+                try { n = e.Current.Name; } catch {}
+                if (n != null && n.StartsWith("Energy saver"))
+                {
+                    string ct = "";
+                    try { ct = e.Current.ControlType.ProgrammaticName; } catch {}
+                    if (ct.Contains("Group"))
+                    {
+                        esGroup = e;
+                        try { gRect = e.Current.BoundingRectangle; } catch {}
+                        break;
+                    }
+                }
+            }
+
+            if (esGroup != null)
+            {
+                Logger.Line("EnergySaver: card found at " + gRect.X + "," + gRect.Y);
+                AutomationElement more = null;
+                System.Windows.Rect moreRect = System.Windows.Rect.Empty;
+                foreach (AutomationElement e in all)
+                {
+                    string n = "";
+                    try { n = e.Current.Name; } catch {}
+                    if (n != "Show more settings") continue;
+                    System.Windows.Rect r = System.Windows.Rect.Empty;
+                    try { r = e.Current.BoundingRectangle; } catch {}
+                    if (r.IsEmpty) continue;
+                    float cy = (float)(r.Y + r.Height / 2);
+                    if (cy >= gRect.Y - 5 && cy <= gRect.Y + gRect.Height + 5)
+                    {
+                        more = e;
+                        moreRect = r;
+                        break;
+                    }
+                }
+                if (more != null)
+                {
+                    ClickCenter(moreRect);
+                    Thread.Sleep(900);
+                    Logger.Line("EnergySaver: card expanded");
+                }
+                else
+                {
+                    Logger.Line("EnergySaver: card appears already expanded");
+                }
+            }
+
+            AutomationElement toggle = null;
+            for (int i = 0; i < 8 && toggle == null; i++)
+            {
+                Thread.Sleep(350);
+                toggle = FindToggleByName(settings, "Always use energy saver");
+            }
+            if (toggle == null)
+            {
+                Logger.Line("EnergySaver: 'Always use energy saver' toggle not found");
+                CloseSettings(settings);
+                return false;
+            }
+
+            ToggleState before = GetToggleState(toggle);
+            Logger.Line("EnergySaver: 'Always use energy saver' is currently " + before);
+            if ((before == ToggleState.On) == on)
+            {
+                Logger.Line("EnergySaver: already " + (on ? "ON" : "OFF") + " (verified)");
+                CloseSettings(settings);
+                return true;
+            }
+
+            try
+            {
+                object pat;
+                if (toggle.TryGetCurrentPattern(TogglePattern.Pattern, out pat))
+                {
+                    ((TogglePattern)pat).Toggle();
+                }
+                else
+                {
+                    Logger.Line("EnergySaver: toggle pattern unavailable");
+                    CloseSettings(settings);
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Line("EnergySaver: toggle failed - " + ex.Message);
+                CloseSettings(settings);
+                return false;
+            }
+
+            Thread.Sleep(700);
+            ToggleState after = GetToggleState(toggle);
+            bool ok = (after == ToggleState.On) == on;
+            Logger.Line("EnergySaver: toggle now " + after + (ok ? " (verified)" : " (MISMATCH)"));
+            CloseSettings(settings);
+            return ok;
         }
 
         private static bool SetAutoThreshold(uint percent)
@@ -1306,7 +1645,7 @@ namespace GpuModeSwitch
             MinimizeBox = false;
             ShowInTaskbar = true;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(470, 312);
+            ClientSize = new Size(470, 330);
             BackColor = Color.FromArgb(22, 22, 26);
             Font = new Font("Segoe UI", 9.5f);
             Opacity = 0;

@@ -9,6 +9,18 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.16** — **layout fixes**: window widened with proper padding so no
+> text clips at the edges, and **both windows are now resizable** — drag any
+> edge or corner of the themed main window (it keeps its rounded corners and
+> dark look; the interior still drags the window), and the log window is a
+> standard resizable window with a docked layout.
+>
+> **v1.0.15** — **game prep + Energy Saver control**: Go Time enables Game
+> Mode, do-not-disturb and pauses background services (SysMain, Windows
+> Search, Print Spooler, DiagTrack); Eco Mode restores them and keeps Energy
+> Saver always on (via the real switch in Settings > Power & battery >
+> Energy saver). The power plan itself always stays Balanced.
+>
 > **v1.0.14** — **Power Mode switching added** (the power-saving lever that
 > build 26200+ still exposes): **Eco Mode** sets the Windows 11 Power Mode to
 > **Battery saver** (best efficiency) on both AC and battery; **Go Time** sets

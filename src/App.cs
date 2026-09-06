@@ -1,8 +1,35 @@
-//  App.cs  (v1.0.22)
+//  App.cs  (v1.1.0)
 //  -----------------
 //  Two executables, one shared codebase (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
+//
+//  v1.1.0 changes (Waves 3-6):
+//    - Logging rewrite: per-run timestamped log files under
+//      %LOCALAPPDATA%\GpuModeSwitch\logs\<GoTime|EcoMode>\ with 30-day /
+//      200 MB retention, an upgraded log window (history, severity filter,
+//      find, open folder) and the Log History browser.
+//    - Go Time selection stage v1.1: the v1.0.22 groups are joined by a
+//      "Performance" group (background process freezer with an editable
+//      freeze list, Ultimate Performance plan switcher, session-scoped
+//      Windows Update pause) and a "Storage cleanup" group (Windows Update
+//      cache purge, DISM component store cleanup, deep clean, GPU shader
+//      caches, per-app browser/launcher caches - CACHE-ONLY; everything
+//      measured in the background before GO, disabled with reasons when the
+//      safety gates block). Named profiles save/restore every checkbox, a
+//      live system monitor panel can be expanded, and the result stage
+//      gained "Log History" / "Session History" buttons.
+//    - GO now also runs the ticked session features (freeze -> power plan
+//      -> WU pause -> cleanup chain), records a session-history record and,
+//      on success, creates the session tray (menu: open / eco-safe restore /
+//      overlay toggle / status / exit).
+//    - --auto semantics unchanged: it applies ONLY the v1.0.22 set (system
+//      optimizations + tray apps + GPU switch). The performance and cleanup
+//      groups never run unattended.
+//    - Eco-safe restore (both exes): no run leaves frozen processes, a
+//      paused Windows Update or a foreign power plan behind - restored on
+//      Eco Mode apply, the tray restore path, errors and exit
+//      (SessionSafety.RestoreAll in Forms.cs).
 //
 //  v1.0.22 changes (Go Time):
 //    - Launch-time selection stage: after probing, Go Time shows both toggle
@@ -118,7 +145,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.22";
+        public const string Version = "1.1.0";
 
         [STAThread]
         private static void Main(string[] args)
@@ -128,6 +155,20 @@ namespace GpuModeSwitch
 #else
             Log.BeginSession("Go Time", Program.Version);
 #endif
+
+            // v1.1 last-resort hooks: log the failure and run the eco-safe
+            // restore so a crashing run never leaves a frozen process, a
+            // paused Windows Update or a foreign power plan behind.
+            Application.ThreadException += delegate(object s, System.Threading.ThreadExceptionEventArgs e)
+            {
+                Log.Error("UI THREAD EXCEPTION", e.Exception);
+                SessionSafety.RestoreAll();
+            };
+            AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e)
+            {
+                Log.Error("UNHANDLED APPDOMAIN EXCEPTION", e.ExceptionObject as Exception);
+                SessionSafety.RestoreAll();
+            };
 
             bool confirm = false;
             bool auto = false;

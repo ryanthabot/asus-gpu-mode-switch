@@ -1,14 +1,34 @@
-//  Forms.cs  (v1.1.0 - Wave 4)
+//  Forms.cs  (v1.1.0 - Wave 6)
 //  ---------------------------
 //  The windows of both apps: the themed borderless main window with its
 //  phase machine and selection stage (MainForm + UiPhase), the log viewer
-//  (LogForm) and the Go Time tray-app picker data (TrayAppInfo / TrayApps,
-//  MODE_STANDARD only). Per-class comments below.
+//  (LogForm), the Go Time tray-app picker data (TrayAppInfo / TrayApps,
+//  MODE_STANDARD only), the eco-safe session restore helper (SessionSafety)
+//  and the freeze-list editor (FreezeListEditorForm, MODE_STANDARD only).
+//  Per-class comments below.
 //
 //  Split out of GpuModeSwitch.cs (Wave 2, zero behavior change). Wave 4
-//  upgraded LogForm into a full log viewer (history over past per-run
-//  logs, severity filter, find-next, open-folder); the rest of the file
-//  is unchanged.
+//  upgraded LogForm into a full log viewer (history over past per-run logs,
+//  severity filter, find-next, open-folder).
+//
+//  Wave 6 (A18) wired the finished module APIs into the apps:
+//    - Go Time's selection stage grew the "Performance" group (background
+//      process freezer with an editable freeze list, Ultimate Performance
+//      plan, session-scoped Windows Update pause) and the "Storage cleanup"
+//      group (WU cache purge, DISM component store, deep clean, GPU shader
+//      caches, per-app caches - measured in the background, disabled with
+//      the reasons when the D7 safety gates block), plus named profiles
+//      (ProfileBar), a collapsible live system monitor (MonitorPanel) and
+//      result-stage "Log History" / "Session History" buttons. The whole
+//      stage lives in one scrollable panel; the form grows to make room.
+//    - GO now also runs the ticked session features (freeze -> power plan
+//      -> WU pause -> cleanup chain), records a SessionRecord and, on
+//      success, creates the session tray (with the overlay). --auto still
+//      applies ONLY the v1.0.22 set - the new groups never run unattended.
+//    - SessionSafety.RestoreAll() is the single eco-safe restore (frozen
+//      processes resumed, previous power plan back, Windows Update resumed,
+//      tray disposed), called on Eco Mode apply, the tray restore path,
+//      background errors, unhandled exceptions and window close.
 
 using System;
 using System.Collections.Generic;
@@ -545,6 +565,44 @@ namespace GpuModeSwitch
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Eco-safe session restore (v1.1, Wave 6): one helper both exes call so
+    // no Go Time session ever leaves a frozen process, a paused Windows
+    // Update or a foreign power plan behind. Called on: Eco Mode apply, Go
+    // Time's restore-to-eco tray path, abnormal background errors, unhandled
+    // exceptions and window close. Every step is individually try/caught and
+    // a no-op when nothing is active - safe on any exit path.
+    // ActiveTray holds Go Time's session tray (null in Eco Mode / before a
+    // successful GO) so this helper can tear it down from anywhere.
+    // ---------------------------------------------------------------------
+    internal static class SessionSafety
+    {
+        public static SessionTray ActiveTray;
+
+        public static void RestoreAll()
+        {
+            try { ProcessFreezer.ResumeAllSafe(); }
+            catch (Exception ex) { Log.Warn("restore: resume failed - " + ex.Message); }
+
+            try { PowerPlans.RestorePrevious(); }
+            catch (Exception ex) { Log.Warn("restore: power plan restore failed - " + ex.Message); }
+
+            try { WuPause.ResumeUpdates(); }
+            catch (Exception ex) { Log.Warn("restore: Windows Update resume failed - " + ex.Message); }
+
+            SessionTray tray = ActiveTray;
+            if (tray != null)
+            {
+                ActiveTray = null;
+                try { tray.Hide(); }
+                catch (Exception ex) { Log.Warn("restore: tray hide failed - " + ex.Message); }
+                try { tray.Dispose(); }
+                catch (Exception ex) { Log.Warn("restore: tray dispose failed - " + ex.Message); }
+            }
+            Log.Info("restore: eco-safe session restore done");
+        }
+    }
+
 #if MODE_STANDARD
     // ---------------------------------------------------------------------
     // Known tray applications for the Go Time post-switch picker. Candidates
@@ -739,6 +797,127 @@ namespace GpuModeSwitch
             }
         }
     }
+
+    // ---------------------------------------------------------------------
+    // Freeze list editor (v1.1, Wave 6): simple dark modal over
+    // ProcessFreezer's freezelist.txt - one process name per line. On save,
+    // names are normalized (a trailing ".exe" is stripped), blank lines are
+    // skipped and guarded (never-freeze) names are refused with a message
+    // (ProcessFreezer.IsGuarded), mirroring the freezer's safety boundary.
+    // ---------------------------------------------------------------------
+    internal class FreezeListEditorForm : Form
+    {
+        private readonly TextBox _list = new TextBox();
+
+        public FreezeListEditorForm()
+        {
+            Text = "Freeze list - background apps";
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            ClientSize = new Size(430, 390);
+            BackColor = Color.FromArgb(24, 24, 28);
+            WindowIcons.Apply(this);
+
+            Label caption = new Label();
+            caption.Text = "One process name per line (no .exe). Ticking \"Freeze background apps\" suspends these apps for the session and resumes them on restore.";
+            caption.ForeColor = Color.FromArgb(165, 165, 172);
+            caption.BackColor = Color.FromArgb(24, 24, 28);
+            caption.Dock = DockStyle.Top;
+            caption.Height = 48;
+            caption.Padding = new Padding(12, 8, 12, 0);
+
+            _list.Multiline = true;
+            _list.ScrollBars = ScrollBars.Vertical;
+            _list.WordWrap = false;
+            _list.BackColor = Color.FromArgb(14, 14, 16);
+            _list.ForeColor = Color.FromArgb(205, 205, 210);
+            _list.BorderStyle = BorderStyle.FixedSingle;
+            _list.Font = new Font("Consolas", 9f);
+            _list.Dock = DockStyle.Fill;
+            _list.HideSelection = false;
+
+            Button save = new Button();
+            save.Text = "Save";
+            save.AutoSize = true;
+            save.FlatStyle = FlatStyle.Flat;
+            save.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
+            save.ForeColor = Color.White;
+            save.BackColor = Color.FromArgb(45, 45, 52);
+            save.Padding = new Padding(6, 4, 6, 4);
+            save.Margin = new Padding(4, 6, 4, 6);
+            save.Click += delegate { OnSave(); };
+
+            Button cancel = new Button();
+            cancel.Text = "Cancel";
+            cancel.AutoSize = true;
+            cancel.FlatStyle = FlatStyle.Flat;
+            cancel.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
+            cancel.ForeColor = Color.FromArgb(210, 210, 216);
+            cancel.BackColor = Color.FromArgb(45, 45, 52);
+            cancel.Padding = new Padding(6, 4, 6, 4);
+            cancel.Margin = new Padding(4, 6, 12, 6);
+            cancel.Click += delegate { Close(); };
+
+            FlowLayoutPanel buttons = new FlowLayoutPanel();
+            buttons.Dock = DockStyle.Bottom;
+            buttons.AutoSize = true;
+            buttons.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            buttons.FlowDirection = FlowDirection.LeftToRight;
+            buttons.BackColor = Color.FromArgb(24, 24, 28);
+            buttons.Controls.Add(save);
+            buttons.Controls.Add(cancel);
+
+            Controls.Add(_list);
+            Controls.Add(buttons);
+            Controls.Add(caption);
+
+            // Seed the defaults on a fresh machine, then load the user list.
+            ProcessFreezer.SeedDefaultListIfMissing();
+            List<string> names = ProcessFreezer.GetUserList();
+            _list.Text = string.Join("\r\n", names.ToArray());
+        }
+
+        private void OnSave()
+        {
+            string[] lines = _list.Text.Replace("\r\n", "\n").Split('\n');
+            List<string> clean = new List<string>();
+            List<string> refused = new List<string>();
+            foreach (string raw in lines)
+            {
+                string name = raw == null ? "" : raw.Trim();
+                if (name.ToLowerInvariant().EndsWith(".exe"))
+                {
+                    name = name.Substring(0, name.Length - 4).Trim();
+                }
+                if (name.Length == 0) continue;              // blank lines are simply skipped
+                if (ProcessFreezer.IsGuarded(name))
+                {
+                    refused.Add(name);                        // never-freeze guard: refuse with feedback
+                    continue;
+                }
+                bool dup = false;
+                foreach (string have in clean)
+                {
+                    if (string.Equals(have, name, StringComparison.OrdinalIgnoreCase)) { dup = true; break; }
+                }
+                if (!dup) clean.Add(name);
+            }
+            if (refused.Count > 0)
+            {
+                MessageBox.Show("These names are protected and cannot be frozen:\n  " +
+                    string.Join("\n  ", refused.ToArray()) +
+                    "\n\nRemove them to save the list.",
+                    "Freeze list", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            ProcessFreezer.SaveUserList(clean);
+            Log.Chan("FREEZE", "freeze list editor: saved " + clean.Count + " name(s)");
+            Close();
+        }
+    }
 #endif
 
     internal enum UiPhase
@@ -775,6 +954,36 @@ namespace GpuModeSwitch
         private readonly List<CheckBox> _optBoxes = new List<CheckBox>();
         private readonly Button _closeTray = new Button();
         private bool _trayBusy;
+
+        // ---- Wave 6 (A18) selection-stage + session fields ------------------
+        private readonly Panel _selectPanel = new Panel();        // scrollable host for the whole selection stage
+        private readonly Label _precheckLabel = new Label();      // precheck text (was _detail in v1.0.22)
+        private readonly ProfileBar _profileBar = new ProfileBar();          // named profiles (A14)
+        private readonly Label _perfTitle = new Label();
+        private readonly CheckBox _freezeBox = new CheckBox();    // ProcessFreezer (A12)
+        private readonly Button _editFreezeList = new Button();
+        private readonly CheckBox _planBox = new CheckBox();      // PowerPlans (A13)
+        private readonly CheckBox _wuPauseBox = new CheckBox();   // WuPause (A13)
+        private readonly Label _cleanTitle = new Label();
+        private readonly CheckBox _cleanWuBox = new CheckBox();   // StorageCleaner (A7), WU-kind categories
+        private readonly CheckBox _cleanDismBox = new CheckBox(); // ComponentStore (A8)
+        private readonly CheckBox _cleanDeepBox = new CheckBox(); // tier-1 temp/WER/dumps + DeepClean (A10)
+        private readonly CheckBox _cleanGpuBox = new CheckBox();  // GpuTools (A11), shader caches only
+        private readonly List<CheckBox> _appCacheBoxes = new List<CheckBox>(); // one per installed app-cache target (A9)
+        private readonly Label _gateLabel = new Label();          // D7 safety-gate warning
+        private readonly Label _oldLabel = new Label();           // "previous Windows installations" report-only note
+        private readonly Button _monitorToggle = new Button();
+        private readonly MonitorPanel _monitorPanel = new MonitorPanel();    // live system monitor (A16)
+        private readonly Button _histBtn = new Button();          // result stage: Log History (A5)
+        private readonly Button _sessBtn = new Button();          // result stage: Session History (A15)
+        private SessionTray _tray;                                // session tray (A17), created after a successful GO
+        private MonitorOverlayForm _overlay;                      // gaming overlay (A17), created on first toggle
+        private List<CleanCategory> _tier1Measured;               // StorageAnalyzer.MeasureAll() snapshot, tier-1 kinds
+        private List<string> _gateReasons;                        // StorageAnalyzer.CheckGates() snapshot (null = unknown)
+        private bool _measureStarted;
+        private bool _selectLaidOut;
+        private int _cleanGroupEndY;                              // panel y after the cleanup group (for the info labels)
+        private string _cleanupSummary = "";                      // result-stage cleanup summary block
 #endif
 
 #if MODE_ECO
@@ -911,61 +1120,59 @@ namespace GpuModeSwitch
             _close.Click += delegate { Close(); };
 
 #if MODE_STANDARD
+            // Result stage, second row (v1.1): log history browser (A5) and
+            // session history viewer (A15).
+            InitButton(_histBtn, "Log History", 110, 24, 36);
+            _histBtn.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            _histBtn.Click += delegate { LogBrowserForm.ShowBrowser(this); };
+            InitButton(_sessBtn, "Session History", 120, 142, 36);
+            _sessBtn.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            _sessBtn.Click += delegate { SessionHistoryForm.ShowHistory(this); };
+            _histBtn.Top = ClientSize.Height - 36 - 54;      // second button row
+            _sessBtn.Top = _histBtn.Top;
+#endif
+
+#if MODE_STANDARD
+            // ---- selection stage (v1.1): everything lives in one scrollable
+            // panel so the growing feature set fits the 560-wide window. The
+            // panel is shown by EnterSelect and reused in tray-only mode by
+            // the result stage (v1.0.22 kept the tray picker visible there).
+            _selectPanel.AutoScroll = true;
+            _selectPanel.BackColor = BackColor;
+            _selectPanel.Visible = false;
+            _selectPanel.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+
+            _precheckLabel.ForeColor = Color.FromArgb(165, 165, 172);
+            _precheckLabel.BackColor = Color.Transparent;
+            _precheckLabel.Visible = false;
+
             _optTitle.Text = "System optimizations";
             _optTitle.ForeColor = Color.FromArgb(165, 165, 172);
             _optTitle.AutoSize = true;
-            _optTitle.Location = new Point(24, 148);
             _optTitle.BackColor = Color.Transparent;
             _optTitle.Visible = false;
 
             string[] optLabels = { "Game Mode", "Do not disturb", "Game DVR recording off", "Network throttling off", "Pause background services" };
-            Point[] optSpots =
-            {
-                new Point(24, 176), new Point(300, 176),
-                new Point(24, 202), new Point(300, 202),
-                new Point(24, 228), new Point(300, 228)
-            };
+            string[] optKeys = { "opt.gamemode", "opt.dnd", "opt.dvr", "opt.throttle", "opt.services" };
             for (int i = 0; i < optLabels.Length; i++)
             {
-                CheckBox cb = new CheckBox();
-                cb.Text = optLabels[i];
-                cb.AutoSize = true;
-                cb.Location = optSpots[i];
-                cb.ForeColor = Color.FromArgb(200, 200, 210);
-                cb.BackColor = Color.Transparent;
-                cb.Checked = true;
-                cb.Visible = false;
+                CheckBox cb = MakeSelectCheckBox(optLabels[i], true);
+                cb.Tag = optKeys[i];                    // stable profile key
                 _optBoxes.Add(cb);
-                Controls.Add(cb);
             }
-            Controls.Add(_optTitle);
 
             _trayTitle.Text = "Tray apps detected:";
             _trayTitle.ForeColor = Color.FromArgb(165, 165, 172);
             _trayTitle.AutoSize = true;
-            _trayTitle.Location = new Point(24, 258);
             _trayTitle.BackColor = Color.Transparent;
             _trayTitle.Visible = false;
 
-            string[] trayLabels = { "Parsec", "Google Drive", "Jellyfin", "Riot Client", "Riot Vanguard" };
-            Point[] traySpots =
+            for (int i = 0; i < TrayApps.Known.Length; i++)
             {
-                new Point(24, 282), new Point(300, 282),
-                new Point(24, 308), new Point(300, 308),
-                new Point(24, 334)
-            };
-            for (int i = 0; i < trayLabels.Length; i++)
-            {
-                CheckBox cb = new CheckBox();
-                cb.Text = trayLabels[i];
-                cb.AutoSize = true;
-                cb.Location = traySpots[i];
-                cb.ForeColor = Color.FromArgb(200, 200, 210);
-                cb.BackColor = Color.Transparent;
-                cb.Visible = false;
+                CheckBox cb = MakeSelectCheckBox(TrayApps.Known[i].Label, false);
                 cb.Enabled = false;
+                cb.Tag = "tray." + TrayApps.Known[i].Label;   // stable profile key
                 _trayBoxes.Add(cb);
-                Controls.Add(cb);
             }
 
             _closeTray.Text = "Close selected";
@@ -973,14 +1180,101 @@ namespace GpuModeSwitch
             _closeTray.FlatAppearance.BorderColor = _accent;
             _closeTray.ForeColor = Color.White;
             _closeTray.BackColor = Color.FromArgb(42, 42, 49);
-            _closeTray.Size = new Size(150, 30);
-            _closeTray.Location = new Point(300, 330);
+            _closeTray.Size = new Size(150, 26);
             _closeTray.TabStop = false;
             _closeTray.Visible = false;
             _closeTray.Click += delegate { BeginCloseTrayApps(); };
 
-            Controls.Add(_trayTitle);
-            Controls.Add(_closeTray);
+            // Performance group: session-scoped, fully reversible features.
+            _perfTitle.Text = "Performance";
+            _perfTitle.ForeColor = Color.FromArgb(165, 165, 172);
+            _perfTitle.AutoSize = true;
+            _perfTitle.BackColor = Color.Transparent;
+            _perfTitle.Visible = false;
+
+            _freezeBox = MakeSelectCheckBox("Freeze background apps", true);
+            _freezeBox.Tag = "perf.freeze";
+            _editFreezeList.Text = "Edit list...";
+            _editFreezeList.FlatStyle = FlatStyle.Flat;
+            _editFreezeList.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
+            _editFreezeList.ForeColor = Color.FromArgb(210, 210, 216);
+            _editFreezeList.BackColor = Color.FromArgb(42, 42, 49);
+            _editFreezeList.Size = new Size(110, 25);
+            _editFreezeList.TabStop = false;
+            _editFreezeList.Visible = false;
+            _editFreezeList.Click += delegate { ShowFreezeListEditor(); };
+
+            _planBox = MakeSelectCheckBox("Ultimate Performance plan", true);
+            _planBox.Tag = "perf.plan";
+            _wuPauseBox = MakeSelectCheckBox("Pause Windows Update", true);
+            _wuPauseBox.Tag = "perf.wupause";
+
+            // Storage cleanup group: deleting actions, so every box starts
+            // UNticked - cleanup only ever runs when explicitly chosen for
+            // this run (and never via --auto).
+            _cleanTitle.Text = "Storage cleanup";
+            _cleanTitle.ForeColor = Color.FromArgb(165, 165, 172);
+            _cleanTitle.AutoSize = true;
+            _cleanTitle.BackColor = Color.Transparent;
+            _cleanTitle.Visible = false;
+
+            _cleanWuBox = MakeSelectCheckBox("Windows Update cache purge", false);
+            _cleanWuBox.Tag = "clean.wu";
+            _cleanDismBox = MakeSelectCheckBox("Component store cleanup (DISM)", false);
+            _cleanDismBox.Tag = "clean.dism";
+            _cleanDeepBox = MakeSelectCheckBox("Deep clean", false);
+            _cleanDeepBox.Tag = "clean.deep";
+            _cleanGpuBox = MakeSelectCheckBox("GPU shader caches", false);
+            _cleanGpuBox.Tag = "clean.gpu";
+
+            _gateLabel.ForeColor = Color.FromArgb(255, 170, 110);
+            _gateLabel.BackColor = Color.Transparent;
+            _gateLabel.Visible = false;
+
+            _oldLabel.ForeColor = Color.FromArgb(150, 150, 158);
+            _oldLabel.BackColor = Color.Transparent;
+            _oldLabel.Visible = false;
+
+            _monitorToggle.Text = "Show system monitor";
+            _monitorToggle.FlatStyle = FlatStyle.Flat;
+            _monitorToggle.FlatAppearance.BorderSize = 0;
+            _monitorToggle.ForeColor = Color.FromArgb(165, 165, 172);
+            _monitorToggle.BackColor = BackColor;
+            _monitorToggle.TextAlign = ContentAlignment.MiddleLeft;
+            _monitorToggle.Size = new Size(180, 22);
+            _monitorToggle.TabStop = false;
+            _monitorToggle.Visible = false;
+            _monitorToggle.Click += delegate { OnMonitorToggle(); };
+
+            _monitorPanel.Visible = false;
+
+            // Named profiles (A14): collect/apply every checkbox by its
+            // stable Tag key.
+            _profileBar.CollectSelections += CollectAllSelections;
+            _profileBar.ApplyRequested += ApplyProfileSelections;
+
+            _selectPanel.Controls.Add(_profileBar);
+            _selectPanel.Controls.Add(_precheckLabel);
+            _selectPanel.Controls.Add(_optTitle);
+            foreach (CheckBox cb in _optBoxes) _selectPanel.Controls.Add(cb);
+            _selectPanel.Controls.Add(_trayTitle);
+            foreach (CheckBox cb in _trayBoxes) _selectPanel.Controls.Add(cb);
+            _selectPanel.Controls.Add(_closeTray);
+            _selectPanel.Controls.Add(_perfTitle);
+            _selectPanel.Controls.Add(_freezeBox);
+            _selectPanel.Controls.Add(_editFreezeList);
+            _selectPanel.Controls.Add(_planBox);
+            _selectPanel.Controls.Add(_wuPauseBox);
+            _selectPanel.Controls.Add(_cleanTitle);
+            _selectPanel.Controls.Add(_cleanWuBox);
+            _selectPanel.Controls.Add(_cleanDismBox);
+            _selectPanel.Controls.Add(_cleanDeepBox);
+            _selectPanel.Controls.Add(_cleanGpuBox);
+            _selectPanel.Controls.Add(_gateLabel);
+            _selectPanel.Controls.Add(_oldLabel);
+            _selectPanel.Controls.Add(_monitorToggle);
+            _selectPanel.Controls.Add(_monitorPanel);
+            Controls.Add(_selectPanel);
 #endif
 
             Controls.AddRange(new Control[]
@@ -1001,12 +1295,69 @@ namespace GpuModeSwitch
             FormClosed += delegate
             {
                 _clock.Dispose();
+                // Eco-safe restore on any exit (v1.1): never leave a frozen
+                // process, a paused Windows Update or a foreign power plan
+                // behind. All steps are no-ops when nothing is active.
+                SessionSafety.RestoreAll();
+#if MODE_STANDARD
+                DisposeOverlay();
+                try { if (MonitorEngine.Running) MonitorEngine.Stop(); } catch { }
+#endif
                 AsusControl.Shutdown();
             };
         }
 
 #if MODE_STANDARD
-        private void ShowTraySection()
+        // ---- selection stage helpers (v1.1, Wave 6) -------------------------
+
+        private static CheckBox MakeSelectCheckBox(string text, bool ticked)
+        {
+            CheckBox cb = new CheckBox();
+            cb.Text = text;
+            cb.AutoSize = true;
+            cb.ForeColor = Color.FromArgb(200, 200, 210);
+            cb.BackColor = Color.Transparent;
+            cb.Checked = ticked;
+            cb.Visible = false;
+            return cb;
+        }
+
+        private void ShowFreezeListEditor()
+        {
+            Log.Info("UI: freeze list editor opened");
+            using (FreezeListEditorForm f = new FreezeListEditorForm())
+            {
+                f.ShowDialog(this);
+            }
+        }
+
+        private void OnMonitorToggle()
+        {
+            bool show = !_monitorPanel.Visible;
+            _monitorPanel.Visible = show;
+            _monitorToggle.Text = show ? "Hide system monitor" : "Show system monitor";
+            if (show) _monitorPanel.AttachToEngine();
+            else _monitorPanel.DetachFromEngine();
+            Log.Chan("MONITOR", "UI: system monitor section " + (show ? "expanded" : "collapsed"));
+        }
+
+        // Positions the tray group at the given panel-relative y. Used at the
+        // top of the panel in result (tray-only) mode and inline in select mode.
+        private void LayoutTrayGroup(int topY)
+        {
+            _trayTitle.SetBounds(0, topY, 0, 0, BoundsSpecified.Location);
+            _trayBoxes[0].SetBounds(0, topY + 24, 0, 0, BoundsSpecified.Location);
+            _trayBoxes[1].SetBounds(276, topY + 24, 0, 0, BoundsSpecified.Location);
+            _trayBoxes[2].SetBounds(0, topY + 50, 0, 0, BoundsSpecified.Location);
+            _trayBoxes[3].SetBounds(276, topY + 50, 0, 0, BoundsSpecified.Location);
+            _trayBoxes[4].SetBounds(0, topY + 76, 0, 0, BoundsSpecified.Location);
+            _closeTray.SetBounds(276, topY + 74, 150, 26);
+        }
+
+        // Starts the tray detection round: rows show "Scanning...", the
+        // background thread detects, the rows populate. Used by both the
+        // select stage and the result stage's tray-only section.
+        private void BeginTrayDetect()
         {
             _trayTitle.Visible = true;
             _closeTray.Visible = true;
@@ -1029,10 +1380,49 @@ namespace GpuModeSwitch
             for (int i = 0; i < TrayApps.Known.Length && i < _trayBoxes.Count; i++)
             {
                 TrayAppInfo a = TrayApps.Known[i];
+                _trayBoxes[i].Visible = true;
                 _trayBoxes[i].Text = a.Label + (a.Running ? "  (running)" : "  (not running)");
                 _trayBoxes[i].Checked = a.Running;
                 _trayBoxes[i].Enabled = a.Running;
             }
+        }
+
+        // Shows (select mode) or hides (result tray-only mode) every non-tray
+        // part of the selection panel.
+        private void SetSelectGroupsVisible(bool on)
+        {
+            _profileBar.Visible = on;
+            _precheckLabel.Visible = on;
+            _optTitle.Visible = on;
+            foreach (CheckBox cb in _optBoxes) cb.Visible = on;
+            _perfTitle.Visible = on;
+            _freezeBox.Visible = on;
+            _editFreezeList.Visible = on;
+            _planBox.Visible = on;
+            _wuPauseBox.Visible = on;
+            _cleanTitle.Visible = on;
+            _cleanWuBox.Visible = on;
+            _cleanDismBox.Visible = on;
+            _cleanDeepBox.Visible = on;
+            _cleanGpuBox.Visible = on;
+            foreach (CheckBox cb in _appCacheBoxes) cb.Visible = on;
+            _gateLabel.Visible = on && _gateLabel.Text.Length > 0;
+            _oldLabel.Visible = on && _oldLabel.Text.Length > 0;
+            _monitorToggle.Visible = on;
+            if (!on) _monitorPanel.Visible = false;
+        }
+
+        // Result stage, v1.0.22 behavior kept: the tray picker stays available
+        // after the switch. It now lives at the top of the selection panel.
+        private void EnterResultTraySection()
+        {
+            _selectPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            _selectPanel.Location = new Point(24, 252);
+            _selectPanel.Size = new Size(ClientSize.Width - 48, 112);
+            _selectPanel.Visible = true;
+            SetSelectGroupsVisible(false);
+            LayoutTrayGroup(2);
+            BeginTrayDetect();
         }
 
         private void BeginCloseTrayApps()
@@ -1158,6 +1548,9 @@ namespace GpuModeSwitch
         {
             _apply.Visible = _cancel.Visible = _restart.Visible = false;
             _logBtn.Visible = _close.Visible = false;
+#if MODE_STANDARD
+            _histBtn.Visible = _sessBtn.Visible = false;
+#endif
         }
 
         private void EnterProbe()
@@ -1223,23 +1616,312 @@ namespace GpuModeSwitch
         }
 
 #if MODE_STANDARD
-        // Selection stage: both toggle groups are shown at launch and the
-        // user decides which optimizations (and tray apps) to apply.
+        // Selection stage: every toggle group is shown at launch and the user
+        // decides what GO applies. The v1.1 stage adds the performance and
+        // storage-cleanup groups, named profiles and the live monitor, all
+        // inside one scrollable panel (the form grows to make room and
+        // AutoScroll covers short screens).
         private void EnterSelect(string precheckText)
         {
             _phase = UiPhase.Confirm;
             _bar.Active = false;
             HideAllButtons();
-            _optTitle.Visible = true;
-            foreach (CheckBox cb in _optBoxes) { cb.Visible = true; cb.Checked = true; cb.Enabled = true; }
-            ShowTraySection();
+            GrowForSelection();
+            _detail.Visible = false;
+            _detail.Text = "";
             _apply.Text = "GO";
             _apply.Visible = true;
             _cancel.Visible = true;
             _status.ForeColor = Color.FromArgb(235, 235, 240);
             _status.Text = "Ready - choose optimizations, then press GO";
-            _detail.Text = precheckText;
+            LayoutSelectContent(precheckText);
+            SetSelectGroupsVisible(true);
+            EnsureMonitorEngine();
+            _monitorPanel.AttachToEngine();
+            StartMeasureOnce();
+            BeginTrayDetect();
             Log.Info("UI: selection stage");
+        }
+
+        // The 640-high window cannot fit the v1.1 selection stage; grow once
+        // (clamped to the working area - the panel scrolls if still short).
+        // The width grows too: the ProfileBar strip needs ~530 px, more than
+        // the 512 px the 560-wide window offered.
+        private void GrowForSelection()
+        {
+            int wantH = 880;
+            int wantW = 600;
+            Rectangle wa = Screen.FromControl(this).WorkingArea;
+            if (wantH > wa.Height - 40) wantH = wa.Height - 40;
+            if (wantH < ClientSize.Height) wantH = ClientSize.Height;   // never shrink
+            if (wantW > wa.Width - 40) wantW = ClientSize.Width;        // narrow screens keep the old width
+            ClientSize = new Size(wantW, wantH);
+            _detail.Size = new Size(ClientSize.Width - 48, Math.Max(170, ClientSize.Height - 368 - 96));
+            Location = new Point(
+                wa.Left + Math.Max(0, (wa.Width - Width) / 2),
+                wa.Top + Math.Max(0, (wa.Height - Height) / 2));
+        }
+
+        // Lays the selection panel out top-to-bottom (once per run; the
+        // app-cache checkboxes are created here because the installed-target
+        // list is cheap to resolve, while the measured sizes arrive
+        // asynchronously via ApplyMeasurements).
+        private void LayoutSelectContent(string precheckText)
+        {
+            if (_selectLaidOut) return;
+            _selectLaidOut = true;
+
+            const int x2 = 276;      // right checkbox column (mirrors the v1.0.22 spots)
+            int pw = ClientSize.Width - 48;
+
+            _selectPanel.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            _selectPanel.Location = new Point(24, 150);
+            _selectPanel.Size = new Size(pw, ClientSize.Height - 150 - 62);
+
+            int y = 2;
+            _profileBar.Size = new Size(pw, 44);
+            _profileBar.Location = new Point(0, y);
+            y += 50;
+
+            _precheckLabel.Text = precheckText == null ? "" : precheckText;
+            int ph = MeasureWrappedHeight(_precheckLabel.Text, pw);
+            _precheckLabel.SetBounds(0, y, pw, ph);
+            y += ph + 10;
+
+            // System optimizations (v1.0.22 group, ticked by default).
+            _optTitle.Location = new Point(0, y); y += 24;
+            y = PlacePair(_optBoxes[0], _optBoxes[1], y);
+            y = PlacePair(_optBoxes[2], _optBoxes[3], y);
+            _optBoxes[4].SetBounds(0, y, 0, 0, BoundsSpecified.Location);
+            y += 30;
+
+            // Tray apps detected (v1.0.22 group).
+            _trayTitle.Location = new Point(0, y); y += 24;
+            y = PlacePair(_trayBoxes[0], _trayBoxes[1], y);
+            y = PlacePair(_trayBoxes[2], _trayBoxes[3], y);
+            _trayBoxes[4].SetBounds(0, y, 0, 0, BoundsSpecified.Location);
+            _closeTray.SetBounds(x2, y - 2, 150, 26);
+            y += 32;
+
+            // Performance (v1.1): freeze / plan / WU pause, "Edit list..." on
+            // the freeze row.
+            _perfTitle.Location = new Point(0, y); y += 24;
+            _freezeBox.SetBounds(0, y, 0, 0, BoundsSpecified.Location);
+            _editFreezeList.SetBounds(x2, y - 2, 110, 25);
+            y += 28;
+            y = PlacePair(_planBox, _wuPauseBox, y);
+            y += 6;
+
+            // Storage cleanup (v1.1): fixed boxes, then one checkbox per
+            // installed app-cache target whose cache dirs resolved non-empty.
+            _cleanTitle.Location = new Point(0, y); y += 24;
+            y = PlacePair(_cleanWuBox, _cleanDismBox, y);
+            y = PlacePair(_cleanDeepBox, _cleanGpuBox, y);
+
+            _appCacheBoxes.Clear();
+            List<AppCacheTarget> targets = AppCacheCleaner.Targets();
+            for (int i = 0; i < targets.Count; i++)
+            {
+                AppCacheTarget t = targets[i];
+                if (t.CacheDirs == null || t.CacheDirs.Length == 0) continue;
+                CheckBox cb = MakeSelectCheckBox("Clean " + t.Name + " cache", false);
+                cb.Tag = "clean.appcache." + t.Name;    // stable profile key
+                cb.Name = t.Name;                       // target name for the clean step
+                _appCacheBoxes.Add(cb);
+                _selectPanel.Controls.Add(cb);
+            }
+            for (int i = 0; i < _appCacheBoxes.Count; i++)
+            {
+                int row = i / 2, col = i % 2;
+                _appCacheBoxes[i].SetBounds(col == 0 ? 0 : x2, y + row * 26, 0, 0, BoundsSpecified.Location);
+            }
+            y += ((_appCacheBoxes.Count + 1) / 2) * 26 + 4;
+
+            // Gate warning + report-only note go right under the cleanup
+            // group; their text arrives with the background measurement.
+            _cleanGroupEndY = y;
+            LayoutMonitorSectionAt(y);
+        }
+
+        private static int PlacePair(CheckBox left, CheckBox right, int y)
+        {
+            left.SetBounds(0, y, 0, 0, BoundsSpecified.Location);
+            if (right != null) right.SetBounds(276, y, 0, 0, BoundsSpecified.Location);
+            return y + 26;
+        }
+
+        private int MeasureWrappedHeight(string text, int width)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            Size s = TextRenderer.MeasureText(text, Font, new Size(width, 100000), TextFormatFlags.WordBreak);
+            return Math.Max(18, s.Height + 2);
+        }
+
+        // The monitor section is the last thing in the panel; it moves down
+        // whenever a gate warning / report-only note appears under the
+        // cleanup group.
+        private void LayoutMonitorSectionAt(int y)
+        {
+            int pw = _selectPanel.Width;
+            _monitorToggle.SetBounds(0, y, 180, 22);
+            _monitorPanel.SetBounds(0, y + 26, Math.Min(pw, 400), 195);
+        }
+
+        private void ReflowInfoLabels()
+        {
+            int pw = _selectPanel.Width;
+            int yy = _cleanGroupEndY;
+            if (_oldLabel.Text.Length > 0)
+            {
+                int h = MeasureWrappedHeight(_oldLabel.Text, pw);
+                _oldLabel.SetBounds(0, yy, pw, h);
+                yy += h + 2;
+            }
+            if (_gateLabel.Text.Length > 0)
+            {
+                int h = MeasureWrappedHeight(_gateLabel.Text, pw);
+                _gateLabel.SetBounds(0, yy, pw, h);
+                yy += h + 4;
+            }
+            LayoutMonitorSectionAt(yy);
+        }
+
+        private static string SizeSuffix(long bytes)
+        {
+            return bytes > 0 ? " (" + StorageCleaner.FormatBytes(bytes) + ")" : "";
+        }
+
+        private static long SumBytes(List<CleanCategory> cats, string kind)
+        {
+            long sum = 0;
+            if (cats == null) return 0;
+            foreach (CleanCategory c in cats)
+            {
+                if (c.Kind == kind) sum += c.Bytes;
+            }
+            return sum;
+        }
+
+        // Background measurement (the RunBg pattern) - strictly read-only.
+        // When it lands: checkbox captions get their measured sizes, gate
+        // reasons disable the whole cleanup group with the reasons shown,
+        // and the report-only previous-installations note appears (D3 Tier 3).
+        private void StartMeasureOnce()
+        {
+            if (_measureStarted) return;
+            _measureStarted = true;
+            RunBg(delegate
+            {
+                List<CleanCategory> all = StorageAnalyzer.MeasureAll();
+                List<CleanCategory> tier1 = new List<CleanCategory>();
+                foreach (CleanCategory c in all)
+                {
+                    // GPU shader-cache paths are measured again by their
+                    // owner (GpuTools, D9) - keep the tier-1 kinds here.
+                    if (c.Kind != CleanCategory.KindGpu) tier1.Add(c);
+                }
+                List<CleanCategory> deep = DeepClean.Measure();
+                List<CleanCategory> gpu = GpuTools.Measure();
+                List<CleanCategory> app = AppCacheCleaner.Measure();
+
+                List<string> runningTargets = new List<string>();
+                try
+                {
+                    List<string> running = AppCacheCleaner.RunningApps();
+                    foreach (AppCacheTarget t in AppCacheCleaner.Targets())
+                    {
+                        foreach (string pn in t.ProcessNames)
+                        {
+                            foreach (string rn in running)
+                            {
+                                if (string.Equals(rn, pn, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    runningTargets.Add(t.Name);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("measure: running-app scan failed - " + ex.Message);
+                }
+
+                List<string> gates = StorageAnalyzer.CheckGates();
+                SafeInvoke(delegate { ApplyMeasurements(tier1, deep, gpu, app, runningTargets, gates); });
+            });
+        }
+
+        private void ApplyMeasurements(List<CleanCategory> tier1, List<CleanCategory> deep,
+            List<CleanCategory> gpu, List<CleanCategory> app, List<string> runningTargets,
+            List<string> gates)
+        {
+            _tier1Measured = tier1;
+            _gateReasons = gates;
+
+            _cleanWuBox.Text = "Windows Update cache purge" + SizeSuffix(SumBytes(tier1, CleanCategory.KindWu));
+
+            long deepBytes = SumBytes(tier1, CleanCategory.KindDeepClean);
+            foreach (CleanCategory c in deep)
+            {
+                if (c.Name == DeepClean.CatPerUserErrorReports ||
+                    c.Name == DeepClean.CatSetupUpgradeLogs) deepBytes += c.Bytes;
+            }
+            _cleanDeepBox.Text = "Deep clean" + SizeSuffix(deepBytes);
+
+            long shaderBytes = 0;
+            foreach (CleanCategory c in gpu)
+            {
+                // Driver installer leftovers are confirm-flagged and not part
+                // of this checkbox - only the shader-cache paths count here.
+                if (c.Name.IndexOf("shader cache", StringComparison.OrdinalIgnoreCase) >= 0) shaderBytes += c.Bytes;
+            }
+            _cleanGpuBox.Text = "GPU shader caches" + SizeSuffix(shaderBytes);
+
+            foreach (CheckBox cb in _appCacheBoxes)
+            {
+                string name = cb.Name;
+                long bytes = 0;
+                bool running = false;
+                foreach (CleanCategory c in app)
+                {
+                    if (c.Name == name) bytes = c.Bytes;
+                }
+                foreach (string rn in runningTargets)
+                {
+                    if (string.Equals(rn, name, StringComparison.OrdinalIgnoreCase)) running = true;
+                }
+                cb.Text = "Clean " + name + " cache" + SizeSuffix(bytes) + (running ? " (app running)" : "");
+                if (running) cb.Checked = false;    // a running app starts UNchecked
+            }
+
+            // Report-only previous Windows installations (D3 Tier 3): shown
+            // as information, never offered for deletion.
+            foreach (CleanCategory c in deep)
+            {
+                if (c.Name == DeepClean.CatPreviousInstallations && c.Bytes > 0)
+                {
+                    _oldLabel.Text = "also found: previous Windows installations " +
+                        StorageCleaner.FormatBytes(c.Bytes) + " (report only - never deleted)";
+                }
+            }
+
+            // D7 gates: any block reason disables the whole cleanup group and
+            // shows why. The cleaners re-check the gates themselves at GO
+            // time (belt and braces).
+            if (gates != null && gates.Count > 0)
+            {
+                _gateLabel.Text = "Cleanup unavailable: " + string.Join("; ", gates.ToArray());
+                _cleanWuBox.Enabled = false;
+                _cleanDismBox.Enabled = false;
+                _cleanDeepBox.Enabled = false;
+                _cleanGpuBox.Enabled = false;
+                foreach (CheckBox cb in _appCacheBoxes) cb.Enabled = false;
+                foreach (string reason in gates) Log.Warn("cleanup gate: " + reason);
+            }
+
+            ReflowInfoLabels();
         }
 #endif
 
@@ -1254,20 +1936,47 @@ namespace GpuModeSwitch
             _status.Text = "Applying " + (TargetEco ? "Eco Mode" : "Standard mode") + "...";
             _detail.Text = "";
             Log.Info("UI: applying");
+            System.Diagnostics.Stopwatch goWatch = System.Diagnostics.Stopwatch.StartNew();
 
 #if MODE_STANDARD
             // Capture the launch-time selections (UI thread).
+            //
+            // --auto semantics (unchanged since v1.0.22): --auto applies ONLY
+            // the system optimizations + tray-app closing + GPU switch. The
+            // v1.1 performance and storage-cleanup groups are NEVER applied
+            // via --auto - freezing other apps' processes, switching power
+            // plans, pausing Windows Update and deleting files must never
+            // happen unattended (documented in README.md).
+            bool sessionFeatures = !_autoMode;
             List<TrayAppInfo> toClose = GatherSelectedTrayApps();
             bool fGameMode = _optBoxes[0].Checked;
             bool fDnd = _optBoxes[1].Checked;
             bool fDvr = _optBoxes[2].Checked;
             bool fThrottle = _optBoxes[3].Checked;
             bool fServices = _optBoxes[4].Checked;
-            HideOptGroup();
-            _trayTitle.Visible = false;
-            foreach (CheckBox cb in _trayBoxes) cb.Visible = false;
+            bool gatesClear = _gateReasons == null || _gateReasons.Count == 0;
+            bool pFreeze = sessionFeatures && _freezeBox.Checked;
+            bool pPlan = sessionFeatures && _planBox.Checked;
+            bool pWuPause = sessionFeatures && _wuPauseBox.Checked;
+            bool cWu = sessionFeatures && gatesClear && _cleanWuBox.Checked;
+            bool cDism = sessionFeatures && gatesClear && _cleanDismBox.Checked;
+            bool cDeep = sessionFeatures && gatesClear && _cleanDeepBox.Checked;
+            bool cGpu = sessionFeatures && gatesClear && _cleanGpuBox.Checked;
+            List<string> cleanApps = new List<string>();
+            if (sessionFeatures && gatesClear)
+            {
+                foreach (CheckBox cb in _appCacheBoxes)
+                {
+                    if (cb.Checked) cleanApps.Add(cb.Name);
+                }
+            }
+            _selectPanel.Visible = false;
+            _detail.Visible = false;
             Log.Info("UI: selections - GameMode=" + fGameMode + " DND=" + fDnd + " DVR=" + fDvr +
-                        " Throttle=" + fThrottle + " Services=" + fServices + " TrayToClose=" + toClose.Count);
+                        " Throttle=" + fThrottle + " Services=" + fServices + " TrayToClose=" + toClose.Count +
+                        " Freeze=" + pFreeze + " Plan=" + pPlan + " WUPause=" + pWuPause +
+                        " Cleanup(WU=" + cWu + " DISM=" + cDism + " Deep=" + cDeep + " GPU=" + cGpu +
+                        " AppCaches=" + cleanApps.Count + ")");
 #endif
 
             RunBg(delegate
@@ -1287,22 +1996,510 @@ namespace GpuModeSwitch
                     r.Headline = "Unexpected error";
                     r.Detail = ex.Message + "\n\nFull details: View log.";
                 }
+#if MODE_ECO
+                // Eco-safe restore (belt and braces, v1.1): make sure no
+                // earlier Go Time session leaves frozen processes, a foreign
+                // power plan or a paused Windows Update behind.
+                SessionSafety.RestoreAll();
+#endif
 #if MODE_STANDARD
+                string prep = "";
+                string cleanupSummary = "";
                 if (r.Ok)
                 {
-                    string prep = GamePrep.ApplyForGaming(fGameMode, fDnd, fDvr, fThrottle, fServices);
+                    prep = GamePrep.ApplyForGaming(fGameMode, fDnd, fDvr, fThrottle, fServices);
                     if (prep.Length > 0) r.Detail += "\n" + prep;
                 }
+                if (r.Ok && sessionFeatures)
+                {
+                    GoExtraResult extra = RunGoSession(pFreeze, pPlan, pWuPause,
+                        cWu, cDism, cDeep, cGpu, cleanApps);
+                    if (extra.DetailLines.Length > 0) r.Detail += extra.DetailLines;
+                    cleanupSummary = extra.CleanupBlock;
+
+                    // Session history (A15): record the whole GO run.
+                    SessionRecord rec = new SessionRecord();
+                    rec.App = "Go Time";
+                    rec.Mode = "Standard";
+                    rec.ActionsApplied = new List<string>();
+                    rec.ActionsApplied.Add("GPU switch: " + r.Headline);
+                    foreach (TrayAppInfo a in toClose) rec.ActionsApplied.Add("Closed tray app: " + a.Label);
+                    if (prep.Length > 0) rec.ActionsApplied.Add("Optimizations: " + prep);
+                    foreach (string act in extra.Actions) rec.ActionsApplied.Add(act);
+                    rec.SpaceFreedByCategory = extra.Freed;
+                    rec.DurationSec = Math.Round(goWatch.Elapsed.TotalSeconds, 1);
+                    rec.ErrorCount = extra.Errors;
+                    rec.Result = r.Headline + (extra.TotalFreed > 0
+                        ? " (free: " + StorageCleaner.FormatBytes(extra.TotalFreed) + ")"
+                        : "");
+                    SessionHistory.Append(rec);
+                }
 #endif
-                SafeInvoke(delegate { EnterResult(r.Ok, r.Headline, r.Detail, r); });
+                SafeInvoke(delegate
+                {
+#if MODE_STANDARD
+                    _cleanupSummary = cleanupSummary;
+                    if (r.Ok && sessionFeatures) AfterGoSuccess();
+#endif
+                    EnterResult(r.Ok, r.Headline, r.Detail, r);
+                });
             });
         }
 
 #if MODE_STANDARD
-        private void HideOptGroup()
+        // Everything RunGoSession collected for the session record and the
+        // result UI.
+        private sealed class GoExtraResult
         {
-            _optTitle.Visible = false;
-            foreach (CheckBox cb in _optBoxes) cb.Visible = false;
+            public List<string> Actions = new List<string>();
+            public Dictionary<string, long> Freed = new Dictionary<string, long>();
+            public List<string> CleanupLines = new List<string>();
+            public int Errors;
+            public long TotalFreed;
+            public string DetailLines = "";
+            public string CleanupBlock = "";
+        }
+
+        // Runs the v1.1 session features after the GPU switch + optimizations
+        // succeeded, in this order: freeze -> power plan -> WU pause ->
+        // cleanup (Tier 1 -> DISM -> deep -> GPU caches -> app caches). Every
+        // step is individually try/caught, logged, and never aborts the run;
+        // the GPU switch result stays the headline. Unticked reversible
+        // features are actively restored (the v1.0.22 "unticked is restored"
+        // semantic). Runs on the GO background thread; the cleaners re-check
+        // the D7 gates themselves.
+        private GoExtraResult RunGoSession(bool pFreeze, bool pPlan, bool pWuPause,
+            bool cWu, bool cDism, bool cDeep, bool cGpu, List<string> cleanApps)
+        {
+            GoExtraResult outc = new GoExtraResult();
+
+            // a) background process freezer (A12)
+            if (pFreeze)
+            {
+                try
+                {
+                    FreezeResult fr = ProcessFreezer.FreezeSelected();
+                    outc.Actions.Add("Background apps frozen: " + fr.Summary);
+                    outc.DetailLines += "\nBackground apps: " + fr.Summary;
+                    if (fr.Failed > 0) outc.Errors++;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("freeze: session freeze failed", ex);
+                    outc.Errors++;
+                    outc.DetailLines += "\nBackground apps: freeze failed (see log)";
+                }
+            }
+            else
+            {
+                ProcessFreezer.ResumeAllSafe();     // unticked = actively restored
+            }
+
+            // b) Ultimate Performance plan (A13)
+            if (pPlan)
+            {
+                try
+                {
+                    if (PowerPlans.SetUltimate())
+                    {
+                        outc.Actions.Add("Power plan: Ultimate Performance activated");
+                        outc.DetailLines += "\nPower plan: Ultimate Performance active";
+                    }
+                    else
+                    {
+                        outc.Errors++;
+                        outc.DetailLines += "\nPower plan: switch failed (see log)";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("power: ultimate plan switch failed", ex);
+                    outc.Errors++;
+                    outc.DetailLines += "\nPower plan: switch failed (see log)";
+                }
+            }
+            else
+            {
+                PowerPlans.RestorePrevious();       // unticked = actively restored
+            }
+
+            // c) session-scoped Windows Update pause (A13)
+            if (pWuPause)
+            {
+                try
+                {
+                    WuPause.PauseUpdates();
+                    outc.Actions.Add("Windows Update: paused for this session");
+                    outc.DetailLines += "\nWindows Update: paused for this session";
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("wu-pause: session pause failed", ex);
+                    outc.Errors++;
+                    outc.DetailLines += "\nWindows Update: pause failed (see log)";
+                }
+            }
+            else
+            {
+                WuPause.ResumeUpdates();            // unticked = actively restored
+            }
+
+            // d) cleanup chain (A7/A8/A9/A10/A11)
+            bool anyCleanup = cWu || cDism || cDeep || cGpu ||
+                (cleanApps != null && cleanApps.Count > 0);
+            if (!anyCleanup) return outc;
+
+            List<string> gateReasons = StorageAnalyzer.CheckGates();   // GO-time re-check
+            if (gateReasons.Count > 0)
+            {
+                outc.Errors++;
+                outc.DetailLines += "\nCleanup skipped - safety gates blocked it (see log)";
+                return outc;
+            }
+
+            // d1) Tier 1 (StorageCleaner, A7): the WU-kind categories when the
+            // WU box is ticked, the tier-1 deepclean-kind categories (temp,
+            // WER, user temp, crash dumps, thumbnails) with the deep box.
+            if (cWu || cDeep)
+            {
+                List<CleanCategory> sel = new List<CleanCategory>();
+                if (_tier1Measured != null)
+                {
+                    foreach (CleanCategory c in _tier1Measured)
+                    {
+                        if (c.Kind == CleanCategory.KindWu && cWu) sel.Add(c);
+                        else if (c.Kind == CleanCategory.KindDeepClean && cDeep) sel.Add(c);
+                    }
+                }
+                if (sel.Count > 0)
+                {
+                    try
+                    {
+                        List<CleanResult> res;
+                        long total;
+                        bool ok = StorageCleaner.Clean(sel, out res, out total);
+                        CollectCleanResults(outc, res);
+                        outc.TotalFreed += total;
+                        if (!ok) outc.Errors++;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error("clean: tier 1 cleanup failed", ex);
+                        outc.Errors++;
+                    }
+                }
+            }
+
+            // d2) DISM component store (A8) - analyzes first itself (D3).
+            if (cDism)
+            {
+                try
+                {
+                    string tail;
+                    bool ok = ComponentStore.RunCleanup(out tail);
+                    if (ok)
+                    {
+                        outc.Actions.Add("DISM component store cleanup: completed");
+                        outc.CleanupLines.Add("Component store (DISM): cleanup finished");
+                    }
+                    else
+                    {
+                        outc.Errors++;
+                        outc.Actions.Add("DISM component store cleanup: failed (see log)");
+                        outc.CleanupLines.Add("Component store (DISM): failed (see log)");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("dism: cleanup failed", ex);
+                    outc.Errors++;
+                    outc.CleanupLines.Add("Component store (DISM): failed (see log)");
+                }
+            }
+
+            // d3) deep clean (A10) - fresh measure, the report-only category
+            // is never selected (D3 Tier 3).
+            if (cDeep)
+            {
+                try
+                {
+                    List<CleanCategory> meas = DeepClean.Measure();
+                    List<CleanCategory> sel = new List<CleanCategory>();
+                    foreach (CleanCategory c in meas)
+                    {
+                        if (c.Name == DeepClean.CatPerUserErrorReports ||
+                            c.Name == DeepClean.CatSetupUpgradeLogs) sel.Add(c);
+                    }
+                    if (sel.Count > 0)
+                    {
+                        List<CleanResult> res;
+                        long total;
+                        bool ok = DeepClean.Clean(sel, out res, out total);
+                        CollectCleanResults(outc, res);
+                        outc.TotalFreed += total;
+                        if (!ok) outc.Errors++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("deepclean: cleanup failed", ex);
+                    outc.Errors++;
+                }
+            }
+
+            // d4) GPU shader caches (A11) - driver leftovers stay (the
+            // confirm flag is deliberately not offered in the default flow).
+            if (cGpu)
+            {
+                try
+                {
+                    List<CleanCategory> meas = GpuTools.Measure();
+                    List<CleanResult> res;
+                    long total;
+                    bool ok = GpuTools.Clean(meas, false, out res, out total);
+                    CollectCleanResults(outc, res);
+                    outc.TotalFreed += total;
+                    if (!ok) outc.Errors++;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("gputools: cleanup failed", ex);
+                    outc.Errors++;
+                }
+            }
+
+            // d5) per-app caches (A9, CACHE-ONLY per D5). The cleaner skips
+            // and warns for any target whose app is running.
+            if (cleanApps != null && cleanApps.Count > 0)
+            {
+                try
+                {
+                    long total;
+                    List<AppCacheCleanResult> res = AppCacheCleaner.Clean(cleanApps, out total);
+                    foreach (AppCacheCleanResult cr in res)
+                    {
+                        outc.Freed[cr.Name + " cache"] = cr.BytesFreed;
+                        outc.CleanupLines.Add(cr.Name + " cache: " +
+                            StorageCleaner.FormatBytes(cr.BytesFreed) + " freed, " +
+                            cr.FilesDeleted + " files deleted" +
+                            (cr.FilesSkipped > 0 ? ", " + cr.FilesSkipped + " skipped" : ""));
+                    }
+                    outc.TotalFreed += total;
+                    outc.Actions.Add("App caches cleaned: " + cleanApps.Count + " target(s), " +
+                        StorageCleaner.FormatBytes(total) + " freed");
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("appcache: cleanup failed", ex);
+                    outc.Errors++;
+                }
+            }
+
+            // Result-stage summary block (compact: capped category lines).
+            StringBuilder sb = new StringBuilder();
+            sb.Append("Storage cleanup: ").Append(outc.TotalFreed > 0
+                ? StorageCleaner.FormatBytes(outc.TotalFreed) + " freed"
+                : "nothing to free");
+            int shown = 0;
+            foreach (string line in outc.CleanupLines)
+            {
+                if (shown == 12)
+                {
+                    sb.Append("\n... and ").Append(outc.CleanupLines.Count - shown)
+                      .Append(" more (View log)");
+                    break;
+                }
+                sb.Append("\n - ").Append(line);
+                shown++;
+            }
+            outc.CleanupBlock = sb.ToString();
+            return outc;
+        }
+
+        // Merges one cleaner's results into the record + summary block.
+        private static void CollectCleanResults(GoExtraResult outc, List<CleanResult> res)
+        {
+            if (res == null) return;
+            foreach (CleanResult cr in res)
+            {
+                if (cr.BytesFreed <= 0 && cr.FilesDeleted <= 0 &&
+                    (cr.Notes == null || cr.Notes.Length == 0)) continue;
+                outc.Freed[cr.CategoryName] = cr.BytesFreed;
+                outc.CleanupLines.Add(cr.CategoryName + ": " + cr.Summary);
+            }
+        }
+
+        // The GO session is active: this form owns the one MonitorEngine for
+        // the whole session (D6) and the session tray (D4) is created with
+        // its five callbacks.
+        private void AfterGoSuccess()
+        {
+            EnsureMonitorEngine();
+            if (_tray != null) return;
+            _tray = new SessionTray(
+                delegate { Show(); Activate(); },           // open window
+                BeginEcoRestore,                            // restore (eco-safe)
+                ToggleOverlay,                              // overlay toggle
+                SessionStatusText,                          // status balloon text
+                BeginExitApp);                              // clean shutdown
+            SessionSafety.ActiveTray = _tray;
+            _tray.Show("Go Time session active");
+            Log.Chan("TRAY", "session tray created (Go Time session active)");
+        }
+
+        private void EnsureMonitorEngine()
+        {
+            if (!MonitorEngine.Running) MonitorEngine.Start(2000);
+        }
+
+        // Tray "Restore (Eco Mode)": the eco-safe session restore (see
+        // SessionSafety) - background apps resumed, previous power plan back,
+        // Windows Update resumed, tray gone. Switching the GPU to Eco itself
+        // stays Eco Mode.exe's one-click job (D4: the suite stays two exes).
+        private void BeginEcoRestore()
+        {
+            RunBg(delegate
+            {
+                SessionSafety.RestoreAll();
+                SafeInvoke(delegate
+                {
+                    _tray = null;
+                    DisposeOverlay();
+                    try { if (MonitorEngine.Running) MonitorEngine.Stop(); } catch { }
+                    _phase = UiPhase.Result;
+                    HideAllButtons();
+                    _bar.Active = false;
+                    _bar.Visible = false;
+                    _status.Text = "Session restored";
+                    _status.ForeColor = Color.FromArgb(76, 195, 138);
+                    _detail.Visible = true;
+                    _detail.Text = "Background apps resumed, previous power plan restored, " +
+                        "Windows Update resumed.\n\nTo switch the GPU to Eco, run Eco Mode.exe.";
+                    _logBtn.Visible = true;
+                    _histBtn.Visible = true;
+                    _sessBtn.Visible = true;
+                    _close.Visible = true;
+                    Log.Info("UI: session restored to the eco-safe state");
+                });
+            });
+        }
+
+        // Tray "Exit": eco-safe restore first, then close for good.
+        private void BeginExitApp()
+        {
+            RunBg(delegate
+            {
+                SessionSafety.RestoreAll();
+                SafeInvoke(delegate
+                {
+                    _tray = null;
+                    DisposeOverlay();
+                    try { if (MonitorEngine.Running) MonitorEngine.Stop(); } catch { }
+                    Close();
+                });
+            });
+        }
+
+        private void ToggleOverlay()
+        {
+            if (_overlay == null || _overlay.IsDisposed)
+            {
+                _overlay = new MonitorOverlayForm();
+                _overlay.Attach();
+                _overlay.Show();
+                EnsureMonitorEngine();   // exactly one engine owner: this form
+            }
+            else
+            {
+                _overlay.Toggle();
+            }
+        }
+
+        private void DisposeOverlay()
+        {
+            try
+            {
+                if (_overlay != null && !_overlay.IsDisposed) _overlay.Dispose();
+            }
+            catch { }
+            _overlay = null;
+        }
+
+        // One-line status for the tray balloon: GPU state (from
+        // AsusControl.DescribeState) + the latest live monitor sample.
+        private string SessionStatusText()
+        {
+            string gpuLine = "";
+            try
+            {
+                string[] stateLines = AsusControl.DescribeState().Replace("\r\n", "\n").Split('\n');
+                foreach (string l in stateLines)
+                {
+                    string t = l.Trim();
+                    if (t.StartsWith("dGPU power:", StringComparison.Ordinal)) { gpuLine = t; break; }
+                }
+            }
+            catch { }
+            string extra = "";
+            MonitorSample s = MonitorEngine.LastSample;
+            if (s != null)
+            {
+                extra = "CPU " + s.CpuPercent.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "%" +
+                        " | RAM " + s.RamText;
+                if (s.HasGpu) extra += " | GPU " + s.GpuPercent.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "%";
+            }
+            string status = "Standard mode - " + (gpuLine.Length > 0 ? gpuLine : "dGPU state unknown");
+            if (extra.Length > 0) status += " | " + extra;
+            return status;
+        }
+
+        // ProfileBar (A14): gather every keyed checkbox. Keys are the stable
+        // Tag values set at construction (opt.*, tray.*, perf.*, clean.*).
+        private Dictionary<string, bool> CollectAllSelections()
+        {
+            Dictionary<string, bool> map = new Dictionary<string, bool>();
+            foreach (Control c in _selectPanel.Controls)
+            {
+                CheckBox cb = c as CheckBox;
+                if (cb == null || cb.Tag == null) continue;
+                map[(string)cb.Tag] = cb.Checked;
+            }
+            return map;
+        }
+
+        // ProfileBar Apply: set every checkbox by key. Unknown keys are
+        // ignored with a log line; disabled (gate-blocked) cleanup boxes are
+        // left alone - a saved profile must not resurrect a cleanup the
+        // safety gates refused.
+        private void ApplyProfileSelections(string name, Dictionary<string, bool> selections)
+        {
+            if (selections == null) return;
+            foreach (KeyValuePair<string, bool> kv in selections)
+            {
+                CheckBox target = null;
+                foreach (Control c in _selectPanel.Controls)
+                {
+                    CheckBox cb = c as CheckBox;
+                    if (cb != null && cb.Tag != null &&
+                        string.Equals((string)cb.Tag, kv.Key, StringComparison.Ordinal))
+                    {
+                        target = cb;
+                        break;
+                    }
+                }
+                if (target == null)
+                {
+                    Log.Chan("PROFILE", "profile apply: unknown key '" + kv.Key + "' ignored");
+                    continue;
+                }
+                if (!target.Enabled)
+                {
+                    Log.Chan("PROFILE", "profile apply: '" + kv.Key + "' is disabled (safety gates) - left unchanged");
+                    continue;
+                }
+                target.Checked = kv.Value;
+            }
+            Log.Chan("PROFILE", "profile applied: " + name);
         }
 
         private List<TrayAppInfo> GatherSelectedTrayApps()
@@ -1328,15 +2525,27 @@ namespace GpuModeSwitch
             HideAllButtons();
             _bar.Active = false;
             _bar.Visible = false;
+            _detail.Visible = true;
             _status.Text = (ok ? "OK - " : "Failed - ") + headline;
             _status.ForeColor = ok ? _accent : Color.FromArgb(255, 120, 120);
             _detail.Text = detail;
+#if MODE_STANDARD
+            if (_cleanupSummary.Length > 0)
+            {
+                _detail.Text = detail + "\n\n" + _cleanupSummary;
+                _cleanupSummary = "";
+            }
+#endif
             _logBtn.Visible = true;
             _logBtn.FlatAppearance.BorderColor = ok ? Color.FromArgb(90, 90, 98) : _accent;
             _close.Visible = true;
+#if MODE_STANDARD
+            _histBtn.Visible = true;
+            _sessBtn.Visible = true;
+#endif
             if (r != null && r.Ok && r.NeedsRestart) _restart.Visible = true;
 #if MODE_STANDARD
-            ShowTraySection();
+            EnterResultTraySection();
 #endif
         }
 
@@ -1350,6 +2559,11 @@ namespace GpuModeSwitch
                 catch (Exception ex)
                 {
                     Log.Error("BACKGROUND ERROR", ex);
+#if MODE_STANDARD
+                    // Abnormal end of a background step (v1.1): eco-safe
+                    // restore so a half-applied session is never left behind.
+                    try { SessionSafety.RestoreAll(); } catch { }
+#endif
                     SafeInvoke(delegate
                     {
                         EnterResult(false, "Unexpected error",

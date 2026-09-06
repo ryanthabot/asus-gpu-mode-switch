@@ -107,7 +107,7 @@ features (see §5). The suite stays **two exes**.
 
 ---
 
-## §3 Architecture map (as of Wave 4, A16 — v1.1.0 in progress)
+## §3 Architecture map (as of Wave 5, A17 — v1.1.0 in progress)
 
 ### Current files
 
@@ -127,6 +127,13 @@ features (see §5). The suite stays **two exes**.
 | `src\Profiles.cs` | `Profile`, `ProfileStore`, `ProfileBar` (+ private `ProfileNameDialog` modal) — named checkbox presets, JSON persistence and the dark profile bar for the Wave 6 UI (A14). |
 | `src\SessionHistory.cs` | Per-run session history: append-only `sessions.jsonl` store + "Session History" viewer (Wave 4, A15). |
 | `src\SystemMonitor.cs` | Live system monitor (A16): `MonitorSample` (one reading), `MonitorEngine` (UI-thread sampling engine) and `MonitorPanel` (embeddable dark-theme grid of labeled bars). |
+| `src\StorageCleaner.cs` | `CleanResult` + `StorageCleaner` (A7): the Tier 1 DELETING executor — WU download-cache purge (service stop/start + DetectNow via reflection COM), Delivery Optimization cmdlet run, temp/WER/log-archive/crash-dump/thumbnail deletions with the D7 hard guard re-checked per item. Logs on the `CLEAN` channel. |
+| `src\ComponentStore.cs` | `DismAnalysis` + `ComponentStore` (A8): Tier 2 WinSxS component-store cleanup, strictly through DISM — read-only `/AnalyzeComponentStore` with output parsing, plus the gated `/StartComponentCleanup` executor. `/ResetBase` FORBIDDEN (D3); WinSxS never touched except through DISM (D7). Logs on the `CLEAN` channel. |
+| `src\AppCacheCleaner.cs` | `AppCacheTarget` + `AppCacheCleanResult` + `AppCacheCleaner` (A9): per-app browser/launcher cache cleaner — CACHE-ONLY per D5 (see class map below). |
+| `src\DeepClean.cs` | `DeepClean` (A10): deep clean suite — per-user WER error reports (>7 days), setup & upgrade logs (MoSetup/DISM/SIH + aged `setupapi*.old` + Panther top-level setup logs, D7-guarded), and report-only previous Windows installations (`Windows.old`/`$WINDOWS.~BT`/`$WINDOWS.~WS` measured, never deleted). Foreign categories come back zeroed with an "owned by <module>" note (D9). |
+| `src\GpuTools.cs` | `GpuTools` (A11): GPU shader-cache measure/clean (NVIDIA DXCache/GLCache/NV_Cache, AMD DxCache/Dx9Cache/GLCache, D3DSCache), confirm-flagged NVIDIA driver installer leftovers (C:\NVIDIA, ProgramData\NVIDIA Corporation\Downloader) and the HAGS (HwSchMode) toggle. Logs on the `GPU` channel. |
+| `src\Overlay.cs` | `MonitorOverlayForm` (A17): compact gaming overlay over the monitor engine — frameless TopMost semi-transparent (~260×120, Opacity 0.85, near-black, rounded corners via `UiShapes`), Consolas 9f metric grid (CPU/RAM/Disk/GPU/GPU temp), click-drag anywhere, "monitor off" hint while the engine is not sampling (never starts/stops the engine itself, per D6). |
+| `src\TrayIcon.cs` | `SessionTray` (A17, D4): session-only tray quick menu — NotifyIcon with the icon drawn in code (16×16 accent-green rounded square + "G", no asset files), dark-themed ContextMenuStrip (Open Go Time / Restore (Eco Mode) / Toggle overlay / Status balloon / Exit), double-click opens the window; five injected callbacks, null = disabled item; no Forms.cs references. |
 | `src\app.manifest` | Win32 manifest: `requireAdministrator`, Windows 10/11 supportedOS, `dpiAware` + PerMonitorV2. |
 | `src\build.cmd` | Two csc.exe invocations (MODE_STANDARD / MODE_ECO), each compiling **all `src\*.cs`**; GAC lookup for UIAutomation, WPF dir for WindowsBase; refs incl. `System.Management`, `System.ServiceProcess`, `System.Web.Extensions`; outputs to `dist\`. |
 | `src\gotime.ico` / `src\ecomode.ico` | Multi-size (16/32/48/256) taskbar/title icons, one per exe. |
@@ -171,6 +178,17 @@ features (see §5). The suite stays **two exes**.
 | `SystemMonitor.cs` | `MonitorSample` | One monitor reading; public-field DTO for the panel (Wave 6) and overlay (Wave 5). `RamText` formats "4.2 / 16.0 GB". | fields `CpuPercent`, `RamUsedBytes`, `RamTotalBytes`, `DiskActivePercent`, `GpuPercent`, `GpuTempC`, `CpuTempC`, `HasGpu`, `HasGpuTemp`, `HasCpuTemp`, `Timestamp`; prop `RamText` |
 | `SystemMonitor.cs` | `MonitorEngine` (static) | Periodic sampler on a System.Windows.Forms.Timer (samples arrive on the UI thread; decision documented in the file header). CPU + disk PerformanceCounters (created once, primed, recreated after Stop), RAM via kernel32 `GlobalMemoryStatusEx` P/Invoke, GPU via nvidia-smi (System32 → NVSMI → PATH, resolved once per session, hidden window, 2.5 s timeout; absent/failed → N/A, never faked from CPU), CPU temp via WMI `root\WMI MSAcpi_ThermalZoneTemperature`. Per-metric try/catch keeps last-known; unavailability logged once per session. Logs through MONITOR. | `Start(int)`, `Start()`, `Stop()`, `RunOnce()`, `Running`, `LastSample`, `event Action<MonitorSample> SampleReady` |
 | `SystemMonitor.cs` | `MonitorPanel : UserControl` | Dark-theme embeddable panel: deterministic TableLayoutPanel grid (Label + ProgressBar + value per metric: CPU %, RAM, Disk %, GPU %, GPU temp, CPU temp; "N/A" when unavailable) + "updated HH:mm:ss" footer; min 360x180; bars dark via uxtheme SetWindowTheme classic mode. | ctor `MonitorPanel()`, `AttachToEngine()`, `DetachFromEngine()` |
+| `StorageCleaner.cs` | `CleanResult` | Outcome DTO of one cleaned category (deleting counterpart of `CleanCategory`) for the Wave 6 UI and session history. | fields `CategoryName`, `BytesFreed`, `FilesDeleted`, `FilesSkipped`, `Notes`; ctors `CleanResult()` and `CleanResult(name, bytes, deleted, skipped, notes)`; `Summary` ("1.20 GB freed, 567 files deleted, 3 skipped") |
+| `StorageCleaner.cs` | `StorageCleaner` (static) | Tier 1 cleaner (Wave 5, A7): re-checks the D7 gates itself (any reason → nothing deleted, returns false), then per exact category name: WU purge (stop UsoSvc→wuauserv→bits bounded 20 s, delete CHILDREN of SoftwareDistribution\Download only, restart bits→wuauserv→UsoSvc only services it stopped, DetectNow via `Microsoft.Update.AutoUpdate` reflection COM — wuauserv refusal aborts only that category); DO cache via `Delete-DeliveryOptimizationCache -Force` (never `-IncludePinnedFiles`, 120 s kill timeout, freed bytes = pre-measured estimate); Windows temp >7 d, user temp, WER >7 d, CbsPersist_*.cab + WindowsUpdate logs >30 d, ReportingEvents.log (during the purge pass when selected, else standalone), crash dumps, thumbnail caches (locked files skip+WARN); gpu/appcache/dism kinds returned zeroed with an "owned by ..." note (D9). HARD GUARD `IsForbiddenPath` before every deletion: WinSxS, catroot, catroot2, `C:\Windows\Installer`, Servicing, anything containing pending.xml, and everything under SoftwareDistribution except Download children + ReportingEvents.log (DataStore included); hit → `Log.Error "GUARD: refusing <path>"`. Long paths deleted via kernel32 `FindFirstFileW`/`DeleteFileW`/`RemoveDirectoryW` with `\\?\`; reparse points never followed; read-only access-denied gets one attribute-clear retry; static run gate refuses concurrent `Clean()` calls. | `Clean(List<CleanCategory>, out List<CleanResult>, out long)`, `FormatBytes(long)` |
+| `ComponentStore.cs` | `DismAnalysis` | Result DTO of one DISM `/AnalyzeComponentStore` run; raw output preserved in full. | fields `CleanupRecommended`, `ActualSizeText`, `SizeText`, `ReclaimableShown`, `ExitCode` (-1 when it never exited cleanly), `OutputText`, `ErrorText` |
+| `ComponentStore.cs` | `ComponentStore` (static) | Tier 2 executor (A8). `Analyze()` runs `Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore` hidden (both streams pumped async so the 20-min hard timeout stays in charge; kill + ERROR on timeout) and parses case-insensitively: "Component Store Cleanup Recommended : Yes/No" → CleanupRecommended, "Actual Size of Component Store :" → ActualSizeText, "Size of Component Store in WinSxS folder :" → SizeText, any "Reclaimable" line → ReclaimableShown; localized-output parse miss → WARN, raw output kept. `RunCleanup(out outputTail)`: D7 gate re-check first (any reason → Log.Error each + refuse), analyze-first ALWAYS (not recommended → "skipped (analyzer says not recommended)" + success), then `/StartComponentCleanup` — /ResetBase FORBIDDEN (D3): arguments exist only as a const + a defensive runtime guard that aborts on /ResetBase; streamed progress `dism: <line>` collapsed by stripping `\b` + trimming and dropping repeats; 45-min kill; DISM error 1726 → WARN "known 24H2+ issue, treated as retryable warning" + success; final `dism cleanup: exit N` + `outputTail` (last ~40 meaningful lines) for the UI. One shared busy flag serializes both ops. | `Analyze()`, `CleanupRecommended()`, `RunCleanup(out string)`, `IsBusy` |
+| `AppCacheCleaner.cs` | `AppCacheTarget` | One cleanable app target: `Name`, `ProcessNames` (no .exe; any one alive blocks cleaning), `CacheDirs` (RESOLVED absolute dirs from `AppCacheCleaner.Targets()` — empty when the app is not installed). | ctor `(string name, string[] processNames, string[] cacheDirs)` |
+| `AppCacheCleaner.cs` | `AppCacheCleanResult` | Result of cleaning one target (delete result DTO; CleanCategory is a measurement). | fields `Name`, `BytesFreed`, `FilesDeleted`, `FilesSkipped`, `Notes` |
+| `AppCacheCleaner.cs` | `AppCacheCleaner` (static) | Per-app browser/launcher cache cleaner (A9, D5 CACHE-ONLY — the hard safety rule; stated in the class header). Two independent walls: (1) the literal whitelist IS the D5 enforcement — candidates are ONLY ever `Cache`/`Code Cache`/`GPUCache`/`DawnCache`/`GrShaderCache`/`ShaderCache`/`Media Cache`/`cache2`/`startupCache`/`htmlcache`/`webcache*`/`shadercache`/`depotcache` resolved under the explicit per-app parents (Chromium `User Data\<profile>` for Chrome/Edge/Brave/Vivaldi, Opera Stable/GX, Firefox `Profiles\*\cache2`+startupCache, Steam htmlcache + steamapps shadercache/depotcache via HKCU SteamPath + libraryfolders.vdf — no disk scan, Discord `Cache`,`Code Cache`,`GPUCache`, Epic `webcache*`, Battle.net `Cache`,`GPUCache` only); (2) a forbidden-name wall (cookies, history, login data, sessions, bookmarks, local storage, indexeddb, web data, places.sqlite, cookies.sqlite, key3/key4.db, logins.json, formhistory.sqlite, sync data, ...) checked against every candidate path segment and child name right before any enumeration or delete (WARN + skip) — even a future path-table bug cannot delete personal data. `Clean` deletes cache-dir CONTENTS only (dirs kept), per-item try/catch, locked files skipped+WARN, reparse points never followed, an app with a running process is never touched (skip + WARN; process-scan failure fails closed), never throws. `Measure` is read-only; absent installs skipped with a CLEAN "not present" note. | `Targets()`, `RunningApps()`, `Measure()`, `Clean(List<string>, out long totalBytesFreed)`, `IsForbiddenName(string)` |
+| `DeepClean.cs` | `DeepClean` (static) | Deep clean suite (A10, ownership split D9): `Measure()` read-only-measures its three categories (per-user WER ReportQueue/ReportArchive items >7 days; aged MoSetup/DISM/SIH files + `C:\Windows` `setupapi*.log.old`/`*.old` (>30d, never the active setupapi.dev.log) + Panther top-level `setup*.log/.etl/.xml` >30d except setupact.log/setuperr.log; previous installations measured per root). `Clean(selected, out results, out totalBytesFreed)` mirrors StorageCleaner.Clean: re-checks `CheckGates()` fail-closed, static run gate, before/after free space, final `deepclean: total ...` line, never throws, locked files skip+WARN. D7 hard guard = StorageCleaner's forbidden set + a Panther rule. "Previous Windows installations (report only)" is `Selected=false` and implements no deletion (D3 Tier 3). Long paths via kernel32 `\\?\` walkers. | `Measure()`, `Clean(List<CleanCategory>, out List<CleanResult>, out long)`, name consts `CatPerUserErrorReports`/`CatSetupUpgradeLogs`/`CatPreviousInstallations` |
+| `GpuTools.cs` | `GpuTools` (static) | GPU tools (A11): owns the CANONICAL cache path table (7 shader-cache categories reusing StorageAnalyzer's exact names + 2 confirm-flagged driver-leftover locations). `Measure()` = read-only, one gpu-kind CleanCategory per present location, missing = "not present (skipped)" log only. `Clean()` re-checks `CheckGates()` itself (fail closed), deletes cache-dir CONTENTS recursively (dirs kept; drivers rebuild), kernel32 `\\?\` long-path walkers, D7 hard guard before every deletion, locked files skip+WARN, per-location "gputools '<name>': X freed, N files deleted, M skipped" + before/after free-space total. Driver leftovers cleaned only on the confirm flag. HAGS = HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\HwSchMode (2=on/1=off; value never deleted, off writes 1; effective after reboot). | `Measure()`, `Clean(selected, includeDriverLeftovers, out results, out totalBytesFreed)`, `HagsStateText()`, `SetHags(bool)`, `RebootRequiredForHags()` |
+| `Overlay.cs` | `MonitorOverlayForm : Form` | Compact frameless overlay bound to the monitor engine: CPU xx.x% / RAM a/b GB / Disk xx% / GPU xx% or N/A / GPU t°C or N/A + "updated HH:mm:ss" footer (Consolas 9f, dark inline palette, N/A dimmed). Shows without stealing focus (`ShowWithoutActivation`); first show lands bottom-right of the primary working area; click-drag anywhere; "monitor off" hint while `MonitorEngine.Running` is false (attach + per-sample + 2 s poll); sample handler InvokeRequired-marshaled and try/caught; Dispose detaches. Logs MONITOR: "overlay: attached/detached/shown/hidden/toggled". | ctor `MonitorOverlayForm()`, `Attach()`, `Detach()`, `Toggle()` |
+| `TrayIcon.cs` | `SessionTray : IDisposable` | Session-only tray icon (D4; compiled into both targets with no `#if` — inert until instantiated, only Go Time's Wave 6 code instantiates it). Icon drawn in code (16×16 accent-green rounded square + white "G"; HICON freed via `DestroyIcon`; system-icon fallback). Dark `ContextMenuStrip` (private `ProfessionalColorTable`): Open Go Time / — / Restore (Eco Mode) / Toggle overlay / Status (balloon) / — / Exit; double-click = openWindow; null callback → item disabled; every invocation logged + try/caught. | ctor `SessionTray(Action openWindow, Action applyEco, Action toggleOverlay, Func<string> statusText, Action exitApp)`, `Show(string initialTip)`, `Hide()`, `SetStatus(string)`, `Dispose()` |
 
 ### Log API (`src\Logger.cs` — Wave 3; the logging core every module logs through)
 
@@ -215,14 +233,12 @@ Two placement notes vs. the original sketch: `WindowIcons` lives in
 `Theme.cs` (it is a UI primitive), and the `UiPhase` enum (used only by
 `MainForm`) lives in `Forms.cs`.
 
-### Future modules (added by later waves, one feature each)
+### Future modules
 
-`StorageCleaner.cs` (A7), `ComponentStore.cs` (A8), `AppCacheCleaner.cs` (A9),
-`DeepClean.cs` (A10), `GpuTools.cs` (A11), `Overlay.cs` + `TrayIcon.cs` (A17).
-
-(Landed in Wave 4: `LogBrowser.cs` A5, `StorageAnalyzer.cs` A6,
-`ProcessFreezer.cs` A12, `PowerPlans.cs` A13, `Profiles.cs` A14,
-`SessionHistory.cs` A15, `SystemMonitor.cs` A16.)
+**None — every planned module has landed** (Wave 4: LogBrowser, StorageAnalyzer,
+ProcessFreezer, PowerPlans, Profiles, SessionHistory, SystemMonitor; Wave 5:
+StorageCleaner, ComponentStore, AppCacheCleaner, DeepClean, GpuTools, Overlay,
+TrayIcon). What remains is Wave 6 integration only (A18, §8).
 
 ---
 
@@ -305,6 +321,29 @@ the run with a single WARN; the in-memory buffer (and therefore the log window
 + Copy log) always keeps working. `Log` also exposes `Snapshot()` (full buffer
 text) beyond the original contract list — LogForm consumes it; A4 builds on it.
 
+**D9 (2026-09-06, orchestrator) — Cleanup category ownership split (A7/A9/A10/A11/A8).**
+Every cleanup target has exactly one owning Wave 5 module, and every cleaner
+returns a zeroed `CleanResult` with an `owned by <module>` note for foreign
+categories it receives. **StorageCleaner (A7)** owns the Tier 1 categories
+from `StorageAnalyzer.MeasureAll()` (Windows Update download cache, Delivery
+Optimization cache, Windows temp >7 days, user temp files, Windows error
+reports in the ProgramData WER trees, old update log archives, update
+reporting log, crash dumps, thumbnail caches) — A10 therefore does NOT
+re-implement them. **DeepClean (A10)** owns the new categories: per-user
+error reports (%LOCALAPPDATA% WER ReportQueue/ReportArchive, items older
+than 7 days), setup & upgrade logs (MoSetup/DISM/SIH files older than 30
+days; aged `setupapi*.log.old`/`*.old` at the Windows root, never the active
+setupapi.dev.log; `C:\Windows\Panther` top-level `setup*.log/.etl/.xml`
+older than 30 days except setupact.log/setuperr.log — subdirectories never
+touched, when in doubt skip + note), and previous Windows installations as a
+REPORT-ONLY category (measure `C:\Windows.old`, `C:\$WINDOWS.~BT`,
+`C:\$WINDOWS.~WS` with Selected=false; deletion rejected by design per the
+D3 Tier 3 decision and not implemented anywhere in DeepClean — this gives
+the Wave 6 UI visibility without enabling the dangerous action).
+**AppCacheCleaner (A9)** owns browser/app caches (cache-only per D5),
+**GpuTools (A11)** owns GPU shader caches and driver leftovers, and
+**ComponentStore (A8)** owns the DISM component store (Tier 2).
+
 ---
 
 ## §5 Feature checklist (v1.1.0)
@@ -317,17 +356,17 @@ text) beyond the original contract list — LogForm consumes it; A4 builds on it
 | Log window upgrade (per-run files, open-log-folder, richer view) | **A4** | **done** (Wave 4, out-of-tree verified both defines) |
 | Log browser (`LogBrowser.cs`, browse/list/past logs) | **A5** | **done** (Wave 4; menu wiring lands with A18) |
 | Storage analyzer (`StorageAnalyzer.cs`, analyze-first reports) | **A6** | **done** (Wave 4; live read-only smoke run included) |
-| Tier 1 safe cache purger (`StorageCleaner.cs`) | **A7** | not started |
-| Component store analyze + StartComponentCleanup (`ComponentStore.cs`) | **A8** | not started |
-| Per-app browser/app cache cleaner, CACHE-ONLY (`AppCacheCleaner.cs`) | **A9** | not started |
-| Deep clean suite (`DeepClean.cs`) | **A10** | not started |
-| GPU shader-cache tools (`GpuTools.cs`) | **A11** | not started |
+| Tier 1 safe cache purger (`StorageCleaner.cs`) | **A7** | **done** (Wave 5, out-of-tree verified both defines) |
+| Component store analyze + StartComponentCleanup (`ComponentStore.cs`) | **A8** | **done** (Wave 5; out-of-tree verified both defines) |
+| Per-app browser/app cache cleaner, CACHE-ONLY (`AppCacheCleaner.cs`) | **A9** | **done** (Wave 5; out-of-tree verified both defines + read-only Measure smoke run) |
+| Deep clean suite (`DeepClean.cs`) | **A10** | **done** (Wave 5; out-of-tree compile verified on both defines + read-only Measure smoke run; Clean never executed by design) |
+| GPU shader-cache tools (`GpuTools.cs`) | **A11** | **done** (Wave 5; out-of-tree harness both defines zero diagnostics, read-only Measure smoke run incl. DXCache 23.15 GB cross-validated against the analyzer) |
 | Background process freezer (`ProcessFreezer.cs`) | **A12** | **done** (Wave 4) |
 | Ultimate Performance power plan switcher + Windows Update pauser (`PowerPlans.cs`) | **A13** | **done** (Wave 4) |
 | Named profiles (`Profiles.cs`) | **A14** | **done** (Wave 4) |
 | Session history (`SessionHistory.cs`) | **A15** | **done** (Wave 4) |
 | Live system monitor (`SystemMonitor.cs`, panel tab) | **A16** | **done** (Wave 4) |
-| Session-only tray menu + overlay (`TrayIcon.cs`, `Overlay.cs`) | **A17** | not started |
+| Session-only tray menu + overlay (`TrayIcon.cs`, `Overlay.cs`) | **A17** | **done** (Wave 5; out-of-tree verified both defines; tray/overlay wiring lands with A18) |
 | GO-flow integration of cleanup into Go Time selection stage | **A18** | not started |
 
 Rules: update your row's Status as you go (`in progress` → `done` with the
@@ -744,6 +783,238 @@ commit hash); mark blocked with the reason. Add new rows at the bottom.
     (`M src/Forms.cs`, 7 new files). Handbook §3/§5/§6 updated from the
     agents' paste-ready blocks; §8 rewritten for Wave 5.
 
+- **2026-09-06 — Wave 5 / A7 (Tier 1 storage cleaner) completed.**
+  - New `src\StorageCleaner.cs` (1,456 lines incl. header, only file
+    touched): `public class CleanResult` (CategoryName/BytesFreed/
+    FilesDeleted/FilesSkipped/Notes, `Summary` one-liner) +
+    `public static class StorageCleaner.Clean(List<CleanCategory> selected,
+    out results, out totalBytesFreed)`.
+  - Gate re-check inside `Clean` (never trusts the caller): any
+    `StorageAnalyzer.CheckGates()` reason → each logged as `Log.Error`,
+    empty results, 0 bytes, false, nothing deleted. Final line
+    `clean: total <X> freed; free space before <A> -> after <B> (delta <D>)`.
+  - WU purge per D3: stop UsoSvc → wuauserv → bits (already-stopped
+    tolerated, bounded WaitForStatus 20 s; WARN-and-continue for
+    UsoSvc/bits; a wuauserv refusal aborts ONLY the WU category and
+    restarts what we stopped); children of
+    SoftwareDistribution\Download deleted (folder itself never touched);
+    finally-block restart bits → wuauserv → UsoSvc limited to services
+    this process stopped; re-detection via reflection COM ProgID
+    `Microsoft.Update.AutoUpdate` → `DetectNow` (no `dynamic`, so
+    build.cmd stays untouched; failure = WARN, non-fatal).
+  - Delivery Optimization: fresh pre-measure walk, then
+    `powershell -NoProfile -ExecutionPolicy Bypass -Command
+    "Delete-DeliveryOptimizationCache -Force"` (never
+    `-IncludePinnedFiles`), hidden, 120 s timeout + kill; success reports
+    the pre-measured bytes as a noted estimate.
+  - Windows temp >7 days (top-level age rule), user temp (all unlocked),
+    WER ReportQueue/ReportArchive >7 days, CbsPersist_*.cab + WindowsUpdate
+    logs >30 days, ReportingEvents.log (during the purge pass when
+    selected, else standalone with skip+warn), MEMORY.DMP + Minidump,
+    thumbcache_/iconcache_ files (Explorer locks → skip+log expected).
+    gpu/appcache/dism categories come back zeroed noting their owner (D9).
+  - D7 hard guard `IsForbiddenPath` re-checked before every deletion
+    (WinSxS, catroot, catroot2, Installer, Servicing, pending.xml, and
+    everything under SoftwareDistribution except Download children +
+    ReportingEvents.log); hits log `GUARD: refusing <path>` and abort the
+    item. Locked files → `clean: skipped <path> (in use)` WARNs tallied
+    (5 verbatim samples + "and N more"); access-denied retried once with
+    the read-only attribute cleared. Long-path deletes via kernel32
+    FindFirstFileW/DeleteFileW/RemoveDirectoryW with `\\?\`; reparse
+    points never followed; static run gate refuses concurrent `Clean()`;
+    safe on a background thread.
+  - **Build verified out-of-tree** (repo build.cmd not run by the agent):
+    entire current `src\` (17 .cs incl. the parallel A8/A9 files) copied
+    to a temp dir, build.cmd's exact csc commands per target — both exit 0,
+    zero diagnostics, `Build OK:` + both exes. Banned-syntax scan clean.
+    Compile verification only — `Clean` never executed (it deletes files);
+    runtime exercise is Wave 6's manual verification.
+
+- **2026-09-06 — Wave 5 / A8 (Component store, Tier 2) completed.**
+  - New `src\ComponentStore.cs` (only file touched): `public class
+    DismAnalysis` (CleanupRecommended, ActualSizeText, SizeText,
+    ReclaimableShown, ExitCode, OutputText, ErrorText) +
+    `public static class ComponentStore` with `Analyze()`,
+    `CleanupRecommended()` and `RunCleanup(out string outputTail)`.
+  - `Analyze()`: hidden `Dism.exe /Online /Cleanup-Image
+    /AnalyzeComponentStore` (both streams pumped asynchronously so the
+    20-minute hard timeout stays in charge; kill + Log.Error on timeout),
+    full raw output preserved; case-insensitive parse of "Component Store
+    Cleanup Recommended : Yes/No", "Actual Size of Component Store :",
+    "Size of Component Store in WinSxS folder :", any "Reclaimable" line;
+    localized-output parse miss → WARN with raw output kept.
+  - `RunCleanup(out outputTail)`: D7 gate re-check first (fail closed),
+    analyze-first ALWAYS (not recommended → "skipped (analyzer says not
+    recommended)" + true), then `/StartComponentCleanup` — /ResetBase is
+    FORBIDDEN (D3): the argument string exists only as the
+    `CleanupArguments` const plus a defensive runtime guard that aborts if
+    it ever contains /ResetBase; stdout streamed line-by-line through
+    CLEAN (`dism: <line>`), collapsing DISM's backspace/spinner progress;
+    45-minute cap (kill + Error); DISM error 1726 → WARN "known 24H2+
+    issue, treated as retryable warning" + true; final `dism cleanup:
+    exit N` + outputTail (last ~40 meaningful lines) for the UI.
+  - One shared busy flag serializes Analyze and RunCleanup (never overlap
+    each other or themselves; refusals logged); `public static bool
+    IsBusy` for the UI. File + class headers state the D7 boundary: WinSxS
+    is never touched except through DISM.
+  - **Build verified out-of-tree** (repo build.cmd NOT run): entire
+    current `src\` copied to a temp dir, build.cmd's exact csc commands
+    for BOTH defines — csc silent (zero diagnostics), exit 0 per target,
+    both exes produced. (First harness run failed only in the then-
+    mid-write AppCacheCleaner.cs and passed after a wait + fresh re-copy.)
+    Banned-syntax scan 0 hits. Temp dir deleted. Compile gate only — no
+    DISM run this wave.
+
+- **2026-09-06 — Wave 5 / A9 (App cache cleaner) completed.**
+  - New `src\AppCacheCleaner.cs` (971 lines, only file touched): D5
+    CACHE-ONLY per-app cache cleaner for Chrome, Edge, Brave, Opera,
+    Vivaldi, Firefox, Steam, Discord, Epic Games Launcher and Battle.net.
+    `AppCacheTarget` (Name / ProcessNames / resolved CacheDirs) +
+    `AppCacheCleanResult` (Name / BytesFreed / FilesDeleted / FilesSkipped
+    / Notes) + static `AppCacheCleaner` (`Targets()`, `RunningApps()`,
+    read-only `Measure()`, `Clean(list, out totalBytesFreed)`,
+    `IsForbiddenName()`).
+  - D5 enforcement — two independent walls, stated in the class header:
+    (1) the literal cache-name whitelist IS the enforcement — candidates
+    only ever the listed names (Cache, Code Cache, GPUCache, DawnCache,
+    GrShaderCache, ShaderCache, Media Cache, cache2, startupCache,
+    htmlcache, webcache*, shadercache, depotcache) under the explicit
+    per-app parents (profile-dir enumeration the only glob; Steam
+    libraries from HKCU SteamPath + %ProgramFiles(x86)%\Steam +
+    libraryfolders.vdf — VDF backslash escaping unescaped, caught by the
+    smoke run; never a disk-wide scan; non-whitelisted names e.g. Battle.net
+    "BrowserCache" refused with a WARN); (2) the forbidden-name wall
+    (cookies, history, login data, sessions, bookmarks, local storage,
+    indexeddb, web data, places.sqlite, cookies.sqlite, key3/key4.db,
+    logins.json, formhistory.sqlite, sync data, ...) re-checked per
+    candidate segment and per child name right before any enumeration or
+    delete — even a future path-table bug cannot delete personal data.
+  - Clean removes cache-dir CONTENTS only (dirs kept), per-item try/catch,
+    locked files skipped + WARN, reparse points never followed/deleted, an
+    app with any of its process names running is never cleaned (skip +
+    WARN; a failing process scan fails closed), never throws; Measure logs
+    `measure '<Name>': ...` / `not present (skipped)` on CLEAN, Clean logs
+    `appcache '<Name>': ... freed, N files deleted, M skipped` + a total
+    line; reuses CleanCategory (Kind "appcache"), Log and
+    SessionHistory.FormatBytes.
+  - **Build verified out-of-tree** (repo build.cmd NOT run): entire
+    current `src\` copied to a temp dir + this file, both csc commands —
+    MODE_STANDARD exit 0 / zero diagnostics, MODE_ECO exit 0 / zero
+    diagnostics, `Build OK:` + both exes; file pure ASCII. **Read-only
+    Measure smoke run** (no BeginSession, zero disk writes) returned real
+    sizes (Edge 352.5 MB, Brave 1.26 GB, Steam 674.4 MB incl.
+    D:\SteamLibrary shadercache, Discord 344.7 MB, Chrome 10.9 MB,
+    Battle.net 67.3 MB) with correct running-app warnings
+    (brave/steam/steamwebhelper/Discord) and forbidden-wall probes.
+    Clean() compile-verified only — live exercise lands with Wave 6.
+
+- **2026-09-06 — Wave 5 / A10 (Deep clean suite) completed.**
+  - New `src\DeepClean.cs` (1,328 lines, only file touched): `public
+    static class DeepClean` with `Measure()` + `Clean(selected, out
+    results, out totalBytesFreed)` mirroring StorageCleaner's discipline
+    (gate re-check fail-closed, static run gate, before/after free space,
+    per-category + final `deepclean:` CLEAN lines, never throws). Owns
+    three D9 categories: "Per-user error reports" (%LOCALAPPDATA% WER
+    ReportQueue/ReportArchive, >7 days), "Setup & upgrade logs"
+    (MoSetup/DISM/SIH files >30 days, folder structure kept; `C:\Windows`
+    top-level `setupapi*.old`/`*.log.old` >30 days — the active
+    setupapi.dev.log can never match; Panther TOP-LEVEL
+    `setup*.log/.etl/.xml` >30 days except setupact.log/setuperr.log,
+    subdirectories never touched) and "Previous Windows installations
+    (report only)" (measure-only, Selected=false, no deletion implemented
+    anywhere — D3 Tier 3). Foreign categories return a zeroed CleanResult
+    with an "owned by <module>" note (D9). D7 hard guard = StorageCleaner's
+    IsForbiddenPath set plus a Panther rule. Long paths via kernel32
+    `\\?\` walkers; pure ASCII source.
+  - **Build verified out-of-tree** (repo build.cmd NOT run): both defines
+    zero diagnostics, `Build OK:` + both exes, exit 0. One first-pass
+    error in DeepClean.cs only (missing MaxErrorSamples const) fixed and
+    re-verified.
+  - **Read-only Measure smoke run** (no BeginSession — verified nothing
+    written to disk; Clean never invoked): per-user WER not present;
+    1.1 MB aged setup log found = exactly `C:\Windows\Panther\setup.etl`
+    (Panther's `setup.exe` directory and `setupinfo` correctly skipped);
+    **Windows.old measured 549.88 GB in 81,745 files** (unelevated
+    access-denied items swallowed into capped note samples, 41 junctions
+    skipped), $WINDOWS.~WS 361.6 KB, $WINDOWS.~BT not present, category
+    Selected=false as designed.
+
+- **2026-09-06 — Wave 5 / A11 (GPU shader-cache tools + HAGS) completed.**
+  - New `src\GpuTools.cs` (978 lines, only file touched, pure ASCII):
+    `public static class GpuTools` with `Measure()`, `Clean(selected,
+    includeDriverLeftovers, out results, out totalBytesFreed)`,
+    `HagsStateText()`, `SetHags(bool)`, `RebootRequiredForHags()`. Owns
+    the canonical GPU cache path table: NVIDIA DXCache/GLCache
+    (%LOCALAPPDATA%) + ProgramData NV_Cache, AMD DxCache/Dx9Cache/GLCache,
+    D3DSCache, plus the confirm-flagged driver leftovers C:\NVIDIA and
+    ProgramData\NVIDIA Corporation\Downloader. The seven shader-cache
+    category names deliberately match StorageAnalyzer.MeasureAll()'s so
+    the Wave 6 UI sees one set of names (accepted duplication, documented
+    in both headers).
+  - Safety model: `Clean()` re-checks `CheckGates()` itself (fail closed);
+    D7 hard guard before every deletion; cache-dir CONTENTS deleted
+    recursively, directories kept; locked files skip + WARN (no
+    running-process check needed for shader caches — Windows keeps
+    deleted-in-use files until handles close, documented); access-denied
+    gets one attribute-clear retry; junctions never followed. Driver
+    leftovers cleaned only with the confirm flag (re-downloading a driver
+    costs bandwidth — always measured so the UI can show the size).
+  - HAGS: reads/writes HwSchMode (DWORD 2=On/1=Off) under
+    HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers; the value is
+    NEVER deleted (off writes 1); state text "On"/"Off"/"Windows default
+    (Off)"/"Windows default"; takes effect after reboot;
+    `RebootRequiredForHags()` returns the per-session flag set only by a
+    successful `SetHags`.
+  - **Build verified out-of-tree** (repo build.cmd NOT run): both defines
+    zero diagnostics (MODE_STANDARD exit 0, MODE_ECO exit 0), `Build OK:`
+    + both exes. **Read-only runtime smoke run**: measured NVIDIA DXCache
+    23.15 GB in 279 files (byte-identical to A6's analyzer numbers — path
+    tables cross-validated), GLCache 64 B, AMD DxCache 48.9 MB, D3DSCache
+    192.4 MB; NV_Cache/Dx9Cache/GLCache/C:\NVIDIA/Downloader correctly
+    "not present (skipped)"; HagsStateText "Windows default (Off)".
+
+- **2026-09-06 — Wave 5 / A17 (Overlay + session tray) completed.**
+  - New `src\Overlay.cs` + `src\TrayIcon.cs` (only files touched),
+    standalone (only Theme.cs/`UiShapes`, SystemMonitor.cs
+    `MonitorEngine`+`MonitorSample` and `Log`; no Forms.cs types):
+    - `MonitorOverlayForm : Form` — frameless TopMost semi-transparent
+      (Opacity 0.85, near-black, rounded corners via `UiShapes`,
+      ShowInTaskbar=false, 260x120, `ShowWithoutActivation` so toggling
+      never steals the game's focus); first show lands bottom-right of the
+      primary working area. Deterministic TableLayoutPanel grid: CPU /
+      RAM / Disk / GPU / GPU temp + "updated HH:mm:ss" footer, Consolas
+      9f, N/A dimmed. `Attach()`/`Detach()` manage the
+      `MonitorEngine.SampleReady` subscription (attach paints LastSample
+      immediately; Dispose detaches); `Toggle()` flips Visible. "monitor
+      off" hint while the engine is not sampling (attach + per-sample +
+      2 s poll) — the overlay never starts/stops the engine (D6).
+      Click-drag anywhere. Logs MONITOR: "overlay: attached/detached/
+      shown/hidden/toggled".
+    - `SessionTray : IDisposable` — session-only NotifyIcon (D4: lives
+      only while the process runs; nothing on disk). Icon drawn in code
+      (16x16 accent-green rounded square + white "G"; HICON freed via
+      DestroyIcon; system-icon fallback). Dark ContextMenuStrip via a
+      private ProfessionalColorTable: Open Go Time / Restore (Eco Mode) /
+      Toggle overlay / Status (balloon) / Exit; double-click =
+      openWindow. Five ctor-injected callbacks; null = disabled item;
+      every invocation logged through TRAY and try/caught (Log.Error,
+      never a crash). Show(tip) / Hide() / SetStatus() / idempotent
+      Dispose. Compiled into both targets with no #if — inert until
+      instantiated, only Go Time's Wave 6 code (A18) instantiates it.
+  - **Build verified out-of-tree** (repo build.cmd NOT run): both defines
+    csc exit 0 with zero diagnostics; copied build.cmd printed `Build OK:`
+    + both exes, exit 0. Banned-syntax scan 0 hits. Temp dir deleted.
+    Runtime behavior (balloons, drag) deferred to Wave 6 manual
+    verification.
+
+- **2026-09-06 — Wave 5 integrated (orchestrator).**
+  - Ran the integrated in-repo build with all 20 source files:
+    `cmd //c "src\build.cmd"` → exit 0, zero csc diagnostics, `Build OK:`
+    + `Eco Mode.exe` (263,680 bytes) and `Go Time.exe` (270,336 bytes).
+    All seven Wave-5 files present as untracked in `git status`. Handbook
+    §3/§5/§6 updated from the agents' paste-ready blocks + D9 appended to
+    §4; §8 rewritten for Wave 6.
+
 ---
 
 ## §7 Build & verify (exact commands)
@@ -786,79 +1057,76 @@ reference — fix the code, never change the compiler or add references outside
    integrated in-repo build of all 14 source files passed with zero
    diagnostics on both `/define` targets.
 
-2. **Wave 5 — cleaners/tools, one feature per agent (parallelizable; each
-   owns exactly one new file):**
+2. **Wave 5 — cleaners/tools: DONE** (see §5/§6). All six modules landed
+   (StorageCleaner A7, ComponentStore A8, AppCacheCleaner A9, DeepClean A10,
+   GpuTools A11, Overlay + TrayIcon A17). Cleanup category ownership is
+   defined by D9; the integrated in-repo build of all 20 source files
+   passed with zero diagnostics on both `/define` targets.
 
-   - **A7 — Tier 1 cleaner:** new `src\StorageCleaner.cs`. Input: selected
-     `CleanCategory` list (from `StorageAnalyzer.MeasureAll()`). WU purge:
-     record service states → stop `usosvc→wuauserv→bits` → delete
-     **children** of `SoftwareDistribution\Download` (never the folder) →
-     restart `bits→wuauserv→usosvc` → `DetectNow()` via ProgID
-     `Microsoft.Update.AutoUpdate`. DO cache via
-     `powershell -NoProfile -Command "Delete-DeliveryOptimizationCache
-     -Force"` (never `-IncludePinnedFiles`). Temp/WER/CBS/log deletions;
-     skip+log locked files; tally bytes freed per category + before/after
-     `DriveInfo` free space. HARD GUARD (D7): never touch WinSxS contents,
-     catroot, catroot2, `C:\Windows\Installer`, Servicing, pending.xml.
-     Refuse to run when `StorageAnalyzer.CheckGates()` returns reasons.
-     Logs through CLEAN.
-   - **A8 — Component store (Tier 2):** new `src\ComponentStore.cs`.
-     `Analyze()`: run `Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore`
-     hidden, parse "Component Store Cleanup Recommended" + sizes.
-     `RunCleanup()`: `/StartComponentCleanup` ONLY — `/ResetBase` is
-     explicitly FORBIDDEN (D3). Stream progress to CLEAN; error 1726 =
-     retryable warning; never run when gates fail.
-   - **A9 — App cache cleaner (CACHE-ONLY, D5):** new
-     `src\AppCacheCleaner.cs`. Targets: Chrome/Edge/Firefox/Brave/Opera/
-     Vivaldi (%LOCALAPPDATA% cache dirs), Steam (appcache/shadercache),
-     Discord (Cache, Code Cache), Epic (webcache), Battle.net (Cache) —
-     name, paths, process names each. `Measure()` / `Clean(selected)`;
-     running-process warn list. HARD EXCLUSION (enforced): only cache-named
-     dirs are ever enumerated/deleted — Cookies, History, Login Data,
-     Sessions, Bookmarks, Local Storage, places.sqlite, cookies.sqlite are
-     untouchable. Logs through CLEAN.
-   - **A10 — Deep clean:** new `src\DeepClean.cs`. `%TEMP%` (unlocked),
-     `C:\Windows\Temp` (>7d), MEMORY.DMP + Minidump, WER trees,
-     thumbnail/icon caches (Explorer locks — skip+log), old setup/upgrade
-     logs. Reuse `CleanCategory`; shader caches NOT here (A11 owns). Logs
-     through CLEAN.
-   - **A11 — GPU tools:** new `src\GpuTools.cs`. Shader caches: NVIDIA
-     DXCache/GLCache, ProgramData NV_Cache, AMD DxCache/Dx9Cache/GLCache,
-     D3DSCache — measure + clean (skip locked). Driver leftovers:
-     `C:\NVIDIA`, `ProgramData\NVIDIA Corporation\Downloader` — measure +
-     clean with confirm flag. HAGS: read/write
-     `HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\HwSchMode`
-     (2=on/1=off), current state + reboot note. Logs through GPU.
-   - **A17 — Overlay + session tray:** new `src\Overlay.cs` +
-     `src\TrayIcon.cs`. Overlay: frameless TopMost semi-transparent
-     ~260×120 form bound to `MonitorEngine.SampleReady`/`LastSample`,
-     click-drag movable, Show/Toggle/Close. Tray: session-only `NotifyIcon`
-     shown after GO applies — menu: Open window / Eco Mode (restore) /
-     Overlay toggle / Status balloon / Exit; Hide on restore/exit; icon
-     drawn in code. Logs through TRAY/MONITOR.
+3. **Wave 6 — A18 (GO-flow integration, docs, final verification) — the
+   last agent.** Wire the finished module APIs into `Forms.cs` + `App.cs`
+   (read each module's §3 rows first; the modules are static classes with
+   no UI of their own except `ProfileBar`, `MonitorPanel`,
+   `LogBrowserForm.ShowBrowser`, `SessionHistoryForm.ShowHistory`):
 
-3. **Wave 6 — A18 (GO-flow integration, docs, final verification):** wire
-   all module APIs into `Forms.cs` + `App.cs` (read each module's §3 rows
-   first). Selection stage adds: **Performance** checkboxes (freeze apps w/
-   `ProcessFreezer.GetUserList()` picker, Ultimate plan via `PowerPlans`,
-   pause WU via `WuPause`); **Storage cleanup** group (Tier 1 purge,
-   component store, deep clean, per-app cache checkboxes) populated with
-   `StorageAnalyzer.MeasureAll()` sizes on stage open — `CheckGates()`
-   checked, blocked items disabled with reason; `MonitorPanel` section;
-   `ProfileBar`. GO executes freezer → plan → WU pause → cleanup, logs +
-   `SessionHistory.Append`; result stage shows space-freed summary + buttons
-   Log History (`LogBrowserForm.ShowBrowser`) / Session History
-   (`SessionHistoryForm.ShowHistory`) / View log / Copy log. Eco Mode:
-   `ProcessFreezer.ResumeAll()` + `PowerPlans.RestorePrevious()` +
-   `WuPause.ResumeUpdates()` + tray hide. Version 1.1.0 in App.cs; README:
-   version-history entry + feature docs + logging/retention section +
-   cleanup safety model + pointer to this handbook. Final verify: build both
-   exes, analyze-only dry run, retention prune check, log browser + filter +
-   search, Copy log in both apps, Eco round-trip.
+   - **Selection stage additions (Go Time, `#if MODE_STANDARD`):**
+     - **Performance** checkbox group: "Freeze background apps" (with a
+       picker/editor over `ProcessFreezer.GetUserList()`/`SaveUserList()`,
+       seeded via `SeedDefaultListIfMissing()`), "Ultimate Performance
+       plan" (`PowerPlans.SetUltimate()`), "Pause Windows Update"
+       (`WuPause.PauseUpdates()`).
+     - **Storage cleanup** checkbox group: "Windows Update cache purge"
+       (A7), "Component store cleanup (DISM)" (A8), "Deep clean" (A10),
+       "GPU shader caches" (A11), per-app cache checkboxes (A9 — one per
+       `AppCacheCleaner.Targets()` entry, with `RunningApps()` warnings).
+       On stage open run `StorageAnalyzer.MeasureAll()` + `DeepClean.
+       Measure()` + `GpuTools.Measure()` + `AppCacheCleaner.Measure()` in
+       the background (RunBg) and show sizes next to each checkbox; run
+       `StorageAnalyzer.CheckGates()` — any block reason disables the
+       cleanup group with the reason shown.
+     - `MonitorPanel` (A16) embedded section; `ProfileBar` (A14) wired to
+       the checkbox groups (`CollectSelections` gathers every checkbox by
+       key, `ApplyRequested` restores them).
+   - **GO execution sequence:** GPU switch (existing) → freezer
+     (`ProcessFreezer.FreezeSelected()`) → power plan → WU pause → cleanup
+     in this order: `StorageCleaner.Clean(selected Tier-1 categories)` →
+     `ComponentStore.RunCleanup` (only if the DISM checkbox is ticked) →
+     `DeepClean.Clean(selected)` → `GpuTools.Clean(selected,
+     includeDriverLeftovers=false)` → `AppCacheCleaner.Clean(selected app
+     names)`. Every step logged; on completion
+     `SessionHistory.Append(new SessionRecord {...})` with the actions
+     applied and per-category `SpaceFreedByCategory` from the CleanResults.
+   - **Result stage:** show the space-freed summary (`CleanResult.Summary`
+     lines + total via `StorageCleaner.FormatBytes`), HAGS reboot note if
+     used, and buttons: **Log History** (`LogBrowserForm.ShowBrowser(this)`),
+     **Session History** (`SessionHistoryForm.ShowHistory(this)`), existing
+     View log + Copy log.
+   - **Session tray (D4):** after GO applies successfully instantiate
+     `SessionTray(openWindow, applyEco, toggleOverlay, statusText,
+     exitApp)` and `Show("Go Time session active")`; `applyEco` runs the
+     Eco restoration path then hides the tray; overlay toggles a
+     `MonitorOverlayForm` (Attach/Detach with the engine).
+   - **Eco Mode path:** `ProcessFreezer.ResumeAllSafe()` +
+     `PowerPlans.RestorePrevious()` + `WuPause.ResumeUpdates()` + tray
+     hide/Dispose must ALL run on the Eco restore path (and on abnormal
+     exit) — never leave a frozen process, a paused WU, or a foreign power
+     plan behind.
+   - **Version + README:** bump `Program.Version` to **1.1.0** in App.cs;
+     README: version-history entry for v1.1.0, feature docs, the logging
+     locations/retention section, the cleanup safety model (D3/D5/D7/D9 in
+     brief), and a pointer to `docs\HANDBOOK.md`. Update §5 (A18 done) and
+     §6 (final entry) here.
+   - **Final verification:** integrated build both targets zero
+     diagnostics; analyze-only dry run (measure + gates, NO deletion);
+     retention prune check; log browser + filter + search; Copy log in
+     both apps; tray/overlay manual checklist documented in
+     BUILD_NOTES.md (UAC-gated manual steps).
 
-Parallel-wave rule (as used in Wave 4): agents in the same wave own
+Parallel-wave rule (as used in Waves 4–5): agents in the same wave own
 disjoint files, verify out-of-tree in a temp-dir harness (never run the
 in-repo `src\build.cmd` while other agents are mid-write), report
 HANDBOOK-UPDATE blocks instead of editing the handbook, and never commit —
 the orchestrator runs the integrated build, applies handbook updates, and
-commits once per wave with a detailed message.
+commits once per wave with a detailed message. A18 (Wave 6) is a single
+agent and edits shared files (`Forms.cs`, `App.cs`) that no other agent
+touches, so it may build in-repo and update the handbook directly.

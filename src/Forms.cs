@@ -1,11 +1,14 @@
-//  Forms.cs  (v1.0.22)
-//  -------------------
+//  Forms.cs  (v1.1.0 - Wave 4)
+//  ---------------------------
 //  The windows of both apps: the themed borderless main window with its
 //  phase machine and selection stage (MainForm + UiPhase), the log viewer
 //  (LogForm) and the Go Time tray-app picker data (TrayAppInfo / TrayApps,
 //  MODE_STANDARD only). Per-class comments below.
 //
-//  Split out of GpuModeSwitch.cs (Wave 2, zero behavior change).
+//  Split out of GpuModeSwitch.cs (Wave 2, zero behavior change). Wave 4
+//  upgraded LogForm into a full log viewer (history over past per-run
+//  logs, severity filter, find-next, open-folder); the rest of the file
+//  is unchanged.
 
 using System;
 using System.Collections.Generic;
@@ -14,6 +17,7 @@ using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -21,14 +25,37 @@ using Microsoft.Win32;
 namespace GpuModeSwitch
 {
     // ---------------------------------------------------------------------
-    // Log viewer: read-only text box with one-click copy so the log can be
-    // relayed from a remote machine.
+    // Log viewer (v1.1.0, Wave 4): read-only monospace view of the live log
+    // buffer or of any older per-run log file. Kept from v1.0.x: the path
+    // strip, the pre-selected viewer text (Ctrl+C works immediately), the
+    // Copy log button and the deterministic TableLayoutPanel shell (buttons
+    // never vanish on resize). Added: a history dropdown over past logs
+    // (newest first, live entry on top, with Refresh), an "Open folder"
+    // button (selects the viewed log in Explorer), a severity filter
+    // (All/Info/Warn/Error, parsed from the [LEVEL] line prefix) and a
+    // case-insensitive Find next. The viewer logs its own actions through
+    // Log.Info.
     // ---------------------------------------------------------------------
     internal class LogForm : Form
     {
+        private readonly string _appName;
+        private readonly TextBox _box = new TextBox();
+        private readonly Label _pathLabel = new Label();
+        private readonly ComboBox _history = new ComboBox();
+        private readonly ComboBox _filter = new ComboBox();
+        private readonly TextBox _search = new TextBox();
+        private readonly Button _copyBtn = new Button();
+        private readonly Button _copyAllBtn;
+        private bool _viewingLive = true;
+        private string _currentViewPath = "";      // "" while the live buffer is shown
+        private string _fullText = "";             // unfiltered text of the current source
+        private bool _suppressHistory;
+
         public LogForm(string appName)
         {
-            Text = "Diagnostic log - " + appName + " v" + Program.Version;
+            _appName = appName == null ? "" : appName;
+
+            Text = "Diagnostic log - " + _appName + " v" + Program.Version;
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
             MinimizeBox = false;
@@ -38,43 +65,85 @@ namespace GpuModeSwitch
             BackColor = Color.FromArgb(24, 24, 28);
             WindowIcons.Apply(this);
 
-            TextBox box = new TextBox();
-            box.Multiline = true;
-            box.ReadOnly = true;
-            box.ScrollBars = ScrollBars.Vertical;
-            box.WordWrap = false;
-            box.BackColor = Color.FromArgb(14, 14, 16);
-            box.ForeColor = Color.FromArgb(205, 205, 210);
-            box.BorderStyle = BorderStyle.FixedSingle;
-            box.Font = new Font("Consolas", 9f);
-            box.Dock = DockStyle.Fill;
-            box.HideSelection = false;      // keep the selection visible without focus
-            box.Text = Log.Snapshot();
-            box.SelectAll();                // pre-selected: Ctrl+C copies immediately
+            // Viewer box - same look and behavior as v1.0.x (monospace, the
+            // selection stays visible without focus, content pre-selected).
+            _box.Multiline = true;
+            _box.ReadOnly = true;
+            _box.ScrollBars = ScrollBars.Vertical;
+            _box.WordWrap = false;
+            _box.BackColor = Color.FromArgb(14, 14, 16);
+            _box.ForeColor = Color.FromArgb(205, 205, 210);
+            _box.BorderStyle = BorderStyle.FixedSingle;
+            _box.Font = new Font("Consolas", 9f);
+            _box.Dock = DockStyle.Fill;
+            _box.HideSelection = false;      // keep the selection visible without focus
 
-            Button copy = new Button();
-            copy.Text = "Copy log";
-            copy.AutoSize = true;
-            copy.FlatStyle = FlatStyle.Flat;
-            copy.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
-            copy.ForeColor = Color.White;
-            copy.BackColor = Color.FromArgb(45, 45, 52);
-            copy.Padding = new Padding(6, 4, 6, 4);
-            copy.Margin = new Padding(4, 6, 4, 6);
-            copy.Click += delegate
-            {
-                try
-                {
-                    Clipboard.SetText(Log.Snapshot());
-                    copy.Text = "Copied!";
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("Clipboard copy failed: " + ex.Message +
-                        "\n\nThe log file is at:\n" + Log.CurrentLogPath,
-                        "Diagnostic log", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
-            };
+            // ---- history row: session dropdown + refresh + open folder ----
+            _history.DropDownStyle = ComboBoxStyle.DropDownList;
+            _history.Width = 300;
+            _history.FlatStyle = FlatStyle.Flat;
+            _history.BackColor = Color.FromArgb(45, 45, 52);
+            _history.ForeColor = Color.FromArgb(220, 220, 226);
+            _history.Margin = new Padding(4, 6, 4, 6);
+            _history.SelectedIndexChanged += OnHistoryChanged;
+
+            Button refresh = MakeToolButton("Refresh");
+            refresh.Click += delegate { OnRefresh(); };
+
+            Button openFolder = MakeToolButton("Open folder");
+            openFolder.Click += delegate { OnOpenFolder(); };
+
+            FlowLayoutPanel historyBar = MakeBar();
+            historyBar.Controls.Add(MakeFieldLabel("History:"));
+            historyBar.Controls.Add(_history);
+            historyBar.Controls.Add(refresh);
+            historyBar.Controls.Add(openFolder);
+
+            // ---- filter / find row: All/Info/Warn/Error + find-next ----
+            _filter.DropDownStyle = ComboBoxStyle.DropDownList;
+            _filter.Width = 84;
+            _filter.FlatStyle = FlatStyle.Flat;
+            _filter.BackColor = Color.FromArgb(45, 45, 52);
+            _filter.ForeColor = Color.FromArgb(220, 220, 226);
+            _filter.Margin = new Padding(4, 6, 4, 6);
+            _filter.Items.Add("All");
+            _filter.Items.Add("Info");
+            _filter.Items.Add("Warn");
+            _filter.Items.Add("Error");
+            _filter.SelectedIndex = 0;
+            _filter.SelectedIndexChanged += OnFilterChanged;
+
+            _search.BackColor = Color.FromArgb(14, 14, 16);
+            _search.ForeColor = Color.FromArgb(205, 205, 210);
+            _search.BorderStyle = BorderStyle.FixedSingle;
+            _search.Font = new Font("Consolas", 9f);
+            _search.Width = 170;
+            _search.Margin = new Padding(4, 6, 4, 6);
+            _search.KeyDown += OnSearchKeyDown;
+
+            Button findNext = MakeToolButton("Find next");
+            findNext.Click += delegate { OnFindNext(); };
+
+            FlowLayoutPanel filterBar = MakeBar();
+            filterBar.Controls.Add(MakeFieldLabel("Show:"));
+            filterBar.Controls.Add(_filter);
+            filterBar.Controls.Add(MakeFieldLabel("Find:"));
+            filterBar.Controls.Add(_search);
+            filterBar.Controls.Add(findNext);
+
+            // ---- bottom row: copy displayed text / copy whole log / close ----
+            _copyBtn.Text = "Copy log";
+            _copyBtn.AutoSize = true;
+            _copyBtn.FlatStyle = FlatStyle.Flat;
+            _copyBtn.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
+            _copyBtn.ForeColor = Color.White;
+            _copyBtn.BackColor = Color.FromArgb(45, 45, 52);
+            _copyBtn.Padding = new Padding(6, 4, 6, 4);
+            _copyBtn.Margin = new Padding(4, 6, 4, 6);
+            _copyBtn.Click += delegate { OnCopyDisplayed(); };
+
+            _copyAllBtn = MakeToolButton("Copy all");
+            _copyAllBtn.Click += delegate { OnCopyAll(); };
 
             Button close = new Button();
             close.Text = "Close";
@@ -93,33 +162,386 @@ namespace GpuModeSwitch
             buttons.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             buttons.FlowDirection = FlowDirection.LeftToRight;
             buttons.BackColor = Color.FromArgb(24, 24, 28);
-            buttons.Controls.Add(copy);
+            buttons.Controls.Add(_copyBtn);
+            buttons.Controls.Add(_copyAllBtn);
             buttons.Controls.Add(close);
 
-            Label pathLabel = new Label();
-            pathLabel.Text = "Log file: " + Log.CurrentLogPath;
-            pathLabel.ForeColor = Color.FromArgb(140, 140, 148);
-            pathLabel.AutoEllipsis = true;
-            pathLabel.Dock = DockStyle.Top;
-            pathLabel.Height = 26;
-            pathLabel.TextAlign = ContentAlignment.MiddleLeft;
-            pathLabel.Padding = new Padding(12, 4, 12, 0);
-            pathLabel.BackColor = Color.FromArgb(24, 24, 28);
+            // Path strip - shows the log currently being viewed.
+            _pathLabel.Text = "Log file: " + Log.CurrentLogPath;
+            _pathLabel.ForeColor = Color.FromArgb(140, 140, 148);
+            _pathLabel.AutoEllipsis = true;
+            _pathLabel.Dock = DockStyle.Top;
+            _pathLabel.Height = 26;
+            _pathLabel.TextAlign = ContentAlignment.MiddleLeft;
+            _pathLabel.Padding = new Padding(12, 4, 12, 0);
+            _pathLabel.BackColor = Color.FromArgb(24, 24, 28);
 
-            // TableLayoutPanel shell: deterministic at any DPI and window size.
+            // TableLayoutPanel shell: deterministic at any DPI and window
+            // size (v1.0.19 lesson) - now five rows, all AutoSize except the
+            // viewer row.
             TableLayoutPanel layout = new TableLayoutPanel();
             layout.Dock = DockStyle.Fill;
             layout.ColumnCount = 1;
-            layout.RowCount = 3;
+            layout.RowCount = 5;
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // path strip
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // history
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // filter + find
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // viewer
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // buttons
             layout.BackColor = Color.FromArgb(24, 24, 28);
-            layout.Controls.Add(pathLabel, 0, 0);
-            layout.Controls.Add(box, 0, 1);
-            layout.Controls.Add(buttons, 0, 2);
+            layout.Controls.Add(_pathLabel, 0, 0);
+            layout.Controls.Add(historyBar, 0, 1);
+            layout.Controls.Add(filterBar, 0, 2);
+            layout.Controls.Add(_box, 0, 3);
+            layout.Controls.Add(buttons, 0, 4);
             Controls.Add(layout);
+
+            // Initial view: the live buffer, pre-selected (v1.0 behavior:
+            // Ctrl+C copies right away; focus the box once shown).
+            PopulateHistory();
+            LoadSelected();
+            Shown += delegate { _box.Focus(); };
+        }
+
+        // ---- shared dark-theme helpers -------------------------------------
+
+        // Flat toolbar button in the LogForm button style.
+        private static Button MakeToolButton(string text)
+        {
+            Button b = new Button();
+            b.Text = text;
+            b.AutoSize = true;
+            b.FlatStyle = FlatStyle.Flat;
+            b.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
+            b.ForeColor = Color.FromArgb(210, 210, 216);
+            b.BackColor = Color.FromArgb(45, 45, 52);
+            b.Padding = new Padding(6, 4, 6, 4);
+            b.Margin = new Padding(4, 6, 4, 6);
+            return b;
+        }
+
+        // One AutoSize FlowLayoutPanel bar for a TableLayoutPanel row (same
+        // proven pattern as the bottom button row, which never vanishes).
+        private static FlowLayoutPanel MakeBar()
+        {
+            FlowLayoutPanel bar = new FlowLayoutPanel();
+            bar.Dock = DockStyle.Top;
+            bar.AutoSize = true;
+            bar.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            bar.FlowDirection = FlowDirection.LeftToRight;
+            bar.WrapContents = true;
+            bar.BackColor = Color.FromArgb(24, 24, 28);
+            return bar;
+        }
+
+        // Small muted caption in front of a combo/text field.
+        private static Label MakeFieldLabel(string text)
+        {
+            Label l = new Label();
+            l.Text = text;
+            l.AutoSize = true;
+            l.ForeColor = Color.FromArgb(140, 140, 148);
+            l.BackColor = Color.FromArgb(24, 24, 28);
+            l.TextAlign = ContentAlignment.MiddleLeft;
+            l.Margin = new Padding(12, 9, 2, 3);
+            return l;
+        }
+
+        // ---- history -------------------------------------------------------
+
+        // One entry of the history dropdown. FilePath "" is the live buffer.
+        private class HistoryItem
+        {
+            public string FilePath;
+            public string Caption;
+
+            public override string ToString()
+            {
+                return Caption == null ? "" : Caption;
+            }
+        }
+
+        // Rebuilds the dropdown: live entry first, then Log.ListLogs(appName)
+        // newest first (the current run's file is tagged "(current)"). The
+        // previous selection is kept when still present, else falls back to
+        // the live entry.
+        private void PopulateHistory()
+        {
+            HistoryItem previous = _history.SelectedItem as HistoryItem;
+            string keepPath = previous == null ? "" : previous.FilePath;
+
+            _suppressHistory = true;
+            _history.Items.Clear();
+
+            HistoryItem live = new HistoryItem();
+            live.FilePath = "";
+            live.Caption = "Current session (live)";
+            _history.Items.Add(live);
+
+            string[] logs = Log.ListLogs(_appName);     // newest first
+            foreach (string path in logs)
+            {
+                HistoryItem it = new HistoryItem();
+                it.FilePath = path;
+                it.Caption = Path.GetFileName(path);
+                if (SamePath(path, Log.CurrentLogPath))
+                {
+                    it.Caption = it.Caption + "  (current)";
+                }
+                _history.Items.Add(it);
+            }
+
+            int select = 0;
+            for (int i = 0; i < _history.Items.Count; i++)
+            {
+                HistoryItem it = (HistoryItem)_history.Items[i];
+                if (keepPath.Length == 0 ? it.FilePath.Length == 0 : SamePath(keepPath, it.FilePath))
+                {
+                    select = i;
+                    break;
+                }
+            }
+            _history.SelectedIndex = select;
+            _suppressHistory = false;
+        }
+
+        // Loads whatever the dropdown currently has selected: the live buffer
+        // (Log.Snapshot()) or the selected older file. Newly loaded content is
+        // pre-selected so Ctrl+C works immediately (v1.0 behavior).
+        private void LoadSelected()
+        {
+            HistoryItem it = _history.SelectedItem as HistoryItem;
+            if (it == null) return;
+
+            if (it.FilePath.Length == 0 || SamePath(it.FilePath, Log.CurrentLogPath))
+            {
+                string current = Log.CurrentLogPath;
+                Log.Info("log viewer: opened " +
+                    (current.Length > 0 ? Path.GetFileName(current) : "(no file yet)") + " (live)");
+                _viewingLive = true;
+                _currentViewPath = "";
+                SetViewText(Log.Snapshot());
+                _pathLabel.Text = "Log file: " + current;
+            }
+            else
+            {
+                Log.Info("log viewer: opened " + Path.GetFileName(it.FilePath));
+                _viewingLive = false;
+                _currentViewPath = it.FilePath;
+                string text;
+                try
+                {
+                    text = File.ReadAllText(it.FilePath);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("log viewer: could not read " + it.FilePath + " - " + ex.Message);
+                    text = "(could not read file: " + ex.Message + ")";
+                }
+                SetViewText(text);
+                _pathLabel.Text = "Log file: " + it.FilePath;
+            }
+            _box.SelectAll();
+        }
+
+        private void OnHistoryChanged(object sender, EventArgs e)
+        {
+            if (_suppressHistory) return;
+            LoadSelected();
+        }
+
+        // Re-lists the saved logs and reloads the current selection (a live
+        // view also picks up lines written since it was loaded).
+        private void OnRefresh()
+        {
+            PopulateHistory();
+            Log.Info("log viewer: history refreshed (" + (_history.Items.Count - 1) + " saved log(s))");
+            LoadSelected();
+        }
+
+        // ---- filter / find ---------------------------------------------------
+
+        private void OnFilterChanged(object sender, EventArgs e)
+        {
+            Log.Info("log viewer: filter=" + FilterLabel());
+            if (_viewingLive)
+            {
+                SetViewText(Log.Snapshot());    // fresh buffer, re-filtered
+            }
+            else
+            {
+                SetViewText(_fullText);         // same file, re-filtered
+            }
+        }
+
+        // Selected severity: INFO/WARN/ERROR, or null for "All".
+        private string CurrentFilterLevel()
+        {
+            string label = FilterLabel();
+            if (label == "Info") return "INFO";
+            if (label == "Warn") return "WARN";
+            if (label == "Error") return "ERROR";
+            return null;
+        }
+
+        private string FilterLabel()
+        {
+            object sel = _filter.SelectedItem;
+            return sel == null ? "All" : sel.ToString();
+        }
+
+        // Level tag of a log line ("INFO"/"WARN"/"ERROR") or null for lines
+        // that are not level-tagged (e.g. exception continuation lines, which
+        // stay attached to the entry above them while filtering).
+        private static string LineLevel(string line)
+        {
+            if (line == null || line.Length < 6) return null;
+            if (line[0] == ' ') return null;
+            int open = line.IndexOf('[');
+            if (open < 0 || open > 24) return null;     // tag sits right after the timestamp
+            int close = line.IndexOf(']', open + 1);
+            if (close < 0 || close > open + 7) return null;
+            string tag = line.Substring(open + 1, close - open - 1);
+            if (tag == "INFO") return "INFO";
+            if (tag == "WARN") return "WARN";
+            if (tag == "ERROR") return "ERROR";
+            return null;
+        }
+
+        // Keeps only lines tagged with the given level (plus their exception
+        // continuations). level must be INFO, WARN or ERROR.
+        private static string FilterLines(string text, string level)
+        {
+            string[] lines = text.Replace("\r\n", "\n").Split('\n');
+            StringBuilder sb = new StringBuilder();
+            bool keepBlock = false;
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string lineLevel = LineLevel(lines[i]);
+                if (lineLevel != null) keepBlock = (lineLevel == level);
+                if (!keepBlock) continue;
+                sb.Append(lines[i]);
+                if (i < lines.Length - 1) sb.Append("\r\n");
+            }
+            return sb.ToString();
+        }
+
+        // Applies the current filter; the full text is kept in _fullText for
+        // Copy all and for re-filtering.
+        private void SetViewText(string fullText)
+        {
+            _fullText = fullText == null ? "" : fullText;
+            string level = CurrentFilterLevel();
+            _box.Text = level == null ? _fullText : FilterLines(_fullText, level);
+        }
+
+        // Case-insensitive find-next over the displayed text; wraps around at
+        // the end. Enter in the search box repeats it.
+        private void OnFindNext()
+        {
+            string needle = _search.Text;
+            if (needle.Length == 0) return;
+            string hay = _box.Text;
+            if (hay.Length == 0) return;
+
+            int start = _box.SelectionStart + _box.SelectionLength;
+            if (start > hay.Length) start = hay.Length;
+            int idx = hay.IndexOf(needle, start, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0 && start > 0)
+            {
+                idx = hay.IndexOf(needle, 0, StringComparison.OrdinalIgnoreCase);   // wrap
+            }
+            if (idx < 0)
+            {
+                Log.Info("log viewer: find \"" + needle + "\" - no match");
+                return;
+            }
+            _box.Select(idx, needle.Length);
+            _box.ScrollToCaret();
+        }
+
+        private void OnSearchKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;      // no ding, no default-button click
+                e.Handled = true;
+                OnFindNext();
+            }
+        }
+
+        // ---- copy / open folder ----------------------------------------------
+
+        // Full path of the log currently being viewed ("" if none).
+        private string ViewedLogPath()
+        {
+            return _viewingLive ? Log.CurrentLogPath : _currentViewPath;
+        }
+
+        // Copies what is displayed right now (filtered view or selected file).
+        private void OnCopyDisplayed()
+        {
+            try
+            {
+                string text = _box.Text;
+                Clipboard.SetText(text);
+                Log.Info("log viewer: copied displayed text (" + text.Length + " chars)");
+                _copyBtn.Text = "Copied!";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Clipboard copy failed: " + ex.Message +
+                    "\n\nThe log file is at:\n" + ViewedLogPath(),
+                    "Diagnostic log", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        // Copies the whole unfiltered source (live buffer or full file).
+        private void OnCopyAll()
+        {
+            try
+            {
+                string text = _viewingLive ? Log.Snapshot() : _fullText;
+                Clipboard.SetText(text);
+                Log.Info("log viewer: copied full log (" + text.Length + " chars)");
+                _copyAllBtn.Text = "Copied!";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Clipboard copy failed: " + ex.Message +
+                    "\n\nThe log file is at:\n" + ViewedLogPath(),
+                    "Diagnostic log", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        // Opens Explorer with the viewed log pre-selected.
+        private void OnOpenFolder()
+        {
+            string path = ViewedLogPath();
+            if (path.Length == 0)
+            {
+                MessageBox.Show("No log file is associated with this view yet.",
+                    "Diagnostic log", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try
+            {
+                Process.Start("explorer.exe", "/select,\"" + path + "\"");
+                Log.Info("log viewer: open folder " + path);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("log viewer: open folder failed - " + ex.Message);
+                MessageBox.Show("Could not open the log folder: " + ex.Message +
+                    "\n\nThe log file is at:\n" + path,
+                    "Diagnostic log", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private static bool SamePath(string a, string b)
+        {
+            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
         }
     }
 

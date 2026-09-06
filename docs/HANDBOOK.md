@@ -107,7 +107,7 @@ features (see §5). The suite stays **two exes**.
 
 ---
 
-## §3 Architecture map (as of Wave 3, A3 — v1.1.0 in progress)
+## §3 Architecture map (as of Wave 4, A16 — v1.1.0 in progress)
 
 ### Current files
 
@@ -120,6 +120,13 @@ features (see §5). The suite stays **two exes**.
 | `src\EnergySaver.cs` | `EnergySaver` (Energy Saver + Power Mode overlay, power API + registry + Settings automation). |
 | `src\Theme.cs` | UI primitives: `WindowIcons`, `UiShapes`, `ShimmerBar`. Colors stay inline at the call sites (as in v1.0.22). |
 | `src\Forms.cs` | `MainForm`, `LogForm`, `UiPhase` enum, `TrayAppInfo` + `TrayApps` (`#if MODE_STANDARD`). |
+| `src\LogBrowser.cs` | `LogBrowserForm` — log history debugging window: browse/list/view/search past logs from both apps. |
+| `src\StorageAnalyzer.cs` | `CleanCategory` + `StorageAnalyzer` (A6): read-only storage cleanup analyzer — measures the WU / deep-clean / GPU shader-cache targets and checks the D7 safety gates. Strictly no deletion here; logs on the `CLEAN` channel. |
+| `src\ProcessFreezer.cs` | `ProcessFreezer` + `FreezeResult` — background process freezer: ntdll suspend/resume of the user's `freezelist.txt` apps during a gaming session (see class map below). |
+| `src\PowerPlans.cs` | `PowerPlans` + `WuPause` (A13): Ultimate Performance plan switcher and session-scoped Windows Update pauser (both fully reversible). |
+| `src\Profiles.cs` | `Profile`, `ProfileStore`, `ProfileBar` (+ private `ProfileNameDialog` modal) — named checkbox presets, JSON persistence and the dark profile bar for the Wave 6 UI (A14). |
+| `src\SessionHistory.cs` | Per-run session history: append-only `sessions.jsonl` store + "Session History" viewer (Wave 4, A15). |
+| `src\SystemMonitor.cs` | Live system monitor (A16): `MonitorSample` (one reading), `MonitorEngine` (UI-thread sampling engine) and `MonitorPanel` (embeddable dark-theme grid of labeled bars). |
 | `src\app.manifest` | Win32 manifest: `requireAdministrator`, Windows 10/11 supportedOS, `dpiAware` + PerMonitorV2. |
 | `src\build.cmd` | Two csc.exe invocations (MODE_STANDARD / MODE_ECO), each compiling **all `src\*.cs`**; GAC lookup for UIAutomation, WPF dir for WindowsBase; refs incl. `System.Management`, `System.ServiceProcess`, `System.Web.Extensions`; outputs to `dist\`. |
 | `src\gotime.ico` / `src\ecomode.ico` | Multi-size (16/32/48/256) taskbar/title icons, one per exe. |
@@ -144,10 +151,26 @@ features (see §5). The suite stays **two exes**.
 | `Theme.cs` | `WindowIcons` (static) | Applies the exe's own icon to a form. | `Apply(Form)` |
 | `Theme.cs` | `UiShapes` (static) | Rounded-rect `GraphicsPath` helper for the themed UI. | `RoundRect(...)` |
 | `Theme.cs` | `ShimmerBar : Control` | Indeterminate animated shimmer progress bar. | `Active`, `Advance()`, `Accent` |
-| `Forms.cs` | `LogForm : Form` | Log viewer: read-only monospace box (pre-selected text), path strip, **Copy log** + Close buttons on a TableLayoutPanel shell (DPI-proof); reads `Log.Snapshot()` / `Log.CurrentLogPath` (A4 will upgrade it). | ctor `LogForm(string appName)` |
+| `Forms.cs` | `LogForm : Form` | Log viewer (Wave 4): read-only monospace box over the **live buffer or any older per-run log**; history dropdown (`Log.ListLogs`, newest first, "Current session (live)" on top + Refresh), severity filter All/Info/Warn/Error (parses the `[LEVEL]` prefix, exception continuations ride along, live view re-filters on change), case-insensitive **Find next** (wraps, Enter repeats), **Open folder** (Explorer `/select` on the viewed log), **Copy log** (displayed text) + **Copy all** (whole source), path strip, pre-selected text (Ctrl+C immediately), 5-row deterministic TableLayoutPanel shell (DPI-proof). Reads `Log.Snapshot()` / `Log.CurrentLogPath` / `Log.ListLogs(appName)`; logs UI actions as `log viewer: ...` via `Log.Info`. | ctor `LogForm(string appName)` |
 | `Forms.cs` | `TrayAppInfo` / `TrayApps` (static, `#if MODE_STANDARD`) | Known tray apps (Parsec, Google Drive, Jellyfin, Riot Client, Riot Vanguard); detection against running processes; close = stop matching watchdog services (registry scan) then graceful close → kill, 3 rounds. | `Known`, `Detect()`, `Close(TrayAppInfo)` |
 | `Forms.cs` | `UiPhase` (enum) | Main-window phase machine states. | `Probe`, `Confirm`, `Applying`, `Result` |
 | `Forms.cs` | `MainForm : Form` | Themed borderless resizable window (rounded corners, fade-in, edge drag/resize via WndProc), phase machine (`UiPhase`: Probe → Confirm/Select → Applying → Result), selection-stage checkboxes + tray picker (Standard), restart prompt, View log button. | ctor `MainForm(bool confirmMode, bool autoMode)` |
+| `LogBrowser.cs` | `LogBrowserForm : Form` | Log-history debugging window (Wave 4): LEFT list of every log from BOTH apps (`Log.LogsRoot` + `GoTime`/`EcoMode`, merged newest first; columns App, File, Size (KB), Last write), RIGHT read-only monospace viewer in LogForm's style (files > ~2 MB load the tail with a notice line; text pre-selected so Ctrl+C works immediately), toolbar (Find box + Search find-next / Search all logs / Open folder via `explorer.exe /select` / Copy view / Refresh) and a status strip. Search is case-insensitive; search-all lists matching lines with file + line number in a results pane (cap 500 + truncation notice; clicking a hit opens that file at that line). Files opened with `FileShare.ReadWrite` so the live current log is viewable; search-all runs on ThreadPool with the RunBg/SafeInvoke pattern. Logs via `Log.Info`: "log browser: opened ..." / "log browser: search '...' ...". | `ShowBrowser(Form owner)` (non-modal, owned by caller); compiled into both targets, reachable from Go Time only (menu entry = Wave 6/A18) |
+| `StorageAnalyzer.cs` | `CleanCategory` | Result DTO of one cleanable target. | `Name`, `Kind` (`wu`/`dism`/`deepclean`/`appcache`/`gpu`), `Bytes`, `Files`, `Notes`, `RiskLabel`, `Selected`; `SizeText` (B/KB/MB/GB) |
+| `StorageAnalyzer.cs` | `StorageAnalyzer` (static) | Read-only measurement of all cleanup targets (WU download cache, Delivery Optimization, Windows temp >7 days, WER reports, old CBS/WindowsUpdate log archives, ReportingEvents.log, user temp, crash dumps, Explorer thumbnail caches, per-path GPU shader caches) + D7 gates (elevation, pending-reboot signals, busy WU services) that fail closed. Long paths via kernel32 `FindFirstFileW`/`GetFileAttributesExW` with the `\\?\` prefix (DirectoryInfo rejects it on .NET 4.x); reparse points skipped; per-item failures swallowed into `Notes`. | `MeasureAll()`, `CheckGates()`, `GatesSummaryText(List<string>)` |
+| `ProcessFreezer.cs` | `FreezeResult` (public struct) | Result DTO of one freeze/resume round, consumed by the Wave 6 UI. | `Suspended`, `Failed`, `SkippedGuarded` (ints), `Summary` (string tally) |
+| `ProcessFreezer.cs` | `ProcessFreezer` (public static) | Background process freezer (A12): suspends/resumes freeze-list apps via ntdll `NtSuspendProcess`/`NtResumeProcess` on `Process` handles. Freeze list `%LOCALAPPDATA%\GpuModeSwitch\freezelist.txt` (one name per line, no .exe; defaults = the TrayApps process names from Forms.cs: parsec, googledrivefs, googledrivesync, jellyfin, riotclient, vgtray, vgc). Never-freeze guard (system, smss, csrss, wininit, winlogon, services, lsass, dwm, explorer, audiodg, MsMpEng, SecurityHealthService + Go Time/Eco Mode + own PID; blank names fail closed); resume only this session's tracked PID+name pairs with a PID-reuse re-check; nothing is ever killed; logs through the FREEZE channel. | `GetUserList()`, `SaveUserList(List<string>)`, `SeedDefaultListIfMissing()`, `IsGuarded(string)`, `FreezeSelected()`, `ResumeAll()`, `ResumeAllSafe()` |
+| `PowerPlans.cs` | `PowerPlans` (static) | Ultimate Performance plan switcher via powercfg.exe: duplicates the hidden Ultimate template (e9a42b02-d5df-448d-aa00-03f14749eb61) once, remembers the previously active plan (first successful run only, never overwritten), activates idempotently. State file `%LOCALAPPDATA%\GpuModeSwitch\powerplan.txt`: line 1 = created-GUID (kept for reuse), line 2 = previous-GUID (cleared by restore). All failures logged with raw output; never throws. | `SetUltimate()`, `RestorePrevious()` (both `bool`) |
+| `PowerPlans.cs` | `WuPause` (static) | Session-scoped WU pauser: stops wuauserv/bits/DoSvc and restarts exactly the services this process stopped (static per-service flags); StartType never changed; exception-safe for exit paths. | `PauseUpdates()`, `ResumeUpdates()` |
+| `Profiles.cs` | `Profile` | One named preset (plain data holder for the store and Wave 6 UI). | fields `Name`, `Selections` (`Dictionary<string,bool>`); ctors `Profile()` (serializer-required) and `Profile(name, selections)` |
+| `Profiles.cs` | `ProfileStore` (static) | JSON persistence at `%LOCALAPPDATA%\GpuModeSwitch\profiles.json` (array of `{Name, Selections}`) via the already-referenced `System.Web.Extensions` JavaScriptSerializer; file order kept; every write a full rewrite (serialize → `File.WriteAllText`); failures logged, never thrown; missing/corrupt file → empty list + one WARN. | `FilePath`, `LoadAll()`, `SaveAll(List<Profile>)`, `Save(name, selections)` (upsert by exact name; logs `[PROFILE] profile saved: <name> (N keys)`), `Delete(name)` (logs `[PROFILE] profile deleted: <name>`), `Find(name)` (exact, always fresh) |
+| `Profiles.cs` | `ProfileBar : UserControl` | Dark horizontal bar (Label "Profile:" + DropDownList combo + Apply/Save.../Delete/Refresh, Forms.cs palette inline, default 560×44) wiring Wave 6 checkbox groups to saved profiles; Apply reads the selected profile fresh from the store; Save grabs the host state via `CollectSelections`, asks the name in the dark `ProfileNameDialog` modal, then saves/refreshes/fires `Saved`; Delete confirms Yes/No; every action logs `[PROFILE]`. | events `ApplyRequested`, `Saved` (`Action<string, Dictionary<string,bool>>`), `CollectSelections` (`Func<Dictionary<string,bool>>`); `Reload()` |
+| `SessionHistory.cs` | `SessionRecord` | One recorded run — plain data holder for the JSONL store; parameterless ctor keeps the JavaScriptSerializer round-trip working. | public fields: `UtcTimestamp`, `App`, `Mode`, `ActionsApplied` (List<string>), `SpaceFreedByCategory` (Dictionary<string,long>), `DurationSec`, `ErrorCount`, `Result` |
+| `SessionHistory.cs` | `SessionHistory` (static) | Append-only JSONL store at `%LOCALAPPDATA%\GpuModeSwitch\sessions.jsonl` (one serialized object per line); all ops best-effort, never throws; corrupt lines skipped with WARNs capped at 3; timestamps normalized to UTC. | `FilePath`, `Append(SessionRecord)`, `ReadAll()` (newest first), `ExportText(List<SessionRecord>)`, `FormatBytes(long)` |
+| `SessionHistory.cs` | `SessionHistoryForm : Form` | "Session History" viewer: dark list (When local / App / Mode / Result / Freed / Errors, newest first) + Refresh, read-only detail pane showing the selected record's ExportText (pre-selected so Ctrl+C works immediately), "Export .txt" + "Copy" buttons; logs `Log.Info` "session history: ...". | ctor `SessionHistoryForm()`, `static void ShowHistory(Form owner)` (non-modal, owned) |
+| `SystemMonitor.cs` | `MonitorSample` | One monitor reading; public-field DTO for the panel (Wave 6) and overlay (Wave 5). `RamText` formats "4.2 / 16.0 GB". | fields `CpuPercent`, `RamUsedBytes`, `RamTotalBytes`, `DiskActivePercent`, `GpuPercent`, `GpuTempC`, `CpuTempC`, `HasGpu`, `HasGpuTemp`, `HasCpuTemp`, `Timestamp`; prop `RamText` |
+| `SystemMonitor.cs` | `MonitorEngine` (static) | Periodic sampler on a System.Windows.Forms.Timer (samples arrive on the UI thread; decision documented in the file header). CPU + disk PerformanceCounters (created once, primed, recreated after Stop), RAM via kernel32 `GlobalMemoryStatusEx` P/Invoke, GPU via nvidia-smi (System32 → NVSMI → PATH, resolved once per session, hidden window, 2.5 s timeout; absent/failed → N/A, never faked from CPU), CPU temp via WMI `root\WMI MSAcpi_ThermalZoneTemperature`. Per-metric try/catch keeps last-known; unavailability logged once per session. Logs through MONITOR. | `Start(int)`, `Start()`, `Stop()`, `RunOnce()`, `Running`, `LastSample`, `event Action<MonitorSample> SampleReady` |
+| `SystemMonitor.cs` | `MonitorPanel : UserControl` | Dark-theme embeddable panel: deterministic TableLayoutPanel grid (Label + ProgressBar + value per metric: CPU %, RAM, Disk %, GPU %, GPU temp, CPU temp; "N/A" when unavailable) + "updated HH:mm:ss" footer; min 360x180; bars dark via uxtheme SetWindowTheme classic mode. | ctor `MonitorPanel()`, `AttachToEngine()`, `DetachFromEngine()` |
 
 ### Log API (`src\Logger.cs` — Wave 3; the logging core every module logs through)
 
@@ -156,7 +179,7 @@ features (see §5). The suite stays **two exes**.
 | `Info` | `void Info(string msg)` | INFO line, channel APP. |
 | `Warn` | `void Warn(string msg)` | WARN line, channel APP. |
 | `Error` | `void Error(string msg, Exception ex = null)` | ERROR line; exception type + message + stack appended on indented continuation lines. |
-| `Chan` | `void Chan(string channel, string msg)` | Channel-tagged INFO line. Channels: `CLEAN`, `GPU`, `FREEZE`, `POWER`, `TRAY`, `MONITOR`, `PROFILE`, `SESSION` — unknown tags still accepted. Existing modules log as GPU = AsusControl, POWER = EnergySaver/Power Mode, TRAY = TrayApps; everything else APP. |
+| `Chan` | `void Chan(string channel, string msg)` | Channel-tagged INFO line. Channels: `CLEAN`, `GPU`, `FREEZE`, `POWER`, `TRAY`, `MONITOR`, `PROFILE`, `SESSION` — unknown tags still accepted. Existing modules log as GPU = AsusControl, POWER = EnergySaver/Power Mode + PowerPlans/WuPause, TRAY = TrayApps; everything else APP. |
 | `BeginSession` | `void BeginSession(string appName, string version)` | Creates the per-run file `%LOCALAPPDATA%\GpuModeSwitch\logs\<GoTime\|EcoMode>\<App>_yyyy-MM-dd_HHmmss.log` (folder/prefix: appName containing "Eco" → EcoMode, else GoTime), writes the session header block (app + version + active `/define` mode, Windows build from registry CurrentBuild+UBR, machine model via WMI `Win32_ComputerSystem`, admin check via `WindowsPrincipal`, .NET runtime version), then prunes retention. |
 | `EndSession` | `void EndSession(string result)` | Footer line: result + total session duration. Called by `Program.Main` on both exit paths. |
 | `CurrentLogPath` | `string` (property) | Full path of the current run's log file (`""` before BeginSession). |
@@ -194,11 +217,12 @@ Two placement notes vs. the original sketch: `WindowIcons` lives in
 
 ### Future modules (added by later waves, one feature each)
 
-`LogBrowser.cs` (A5), `StorageAnalyzer.cs` (A6), `StorageCleaner.cs` (A7),
-`ComponentStore.cs` (A8), `AppCacheCleaner.cs` (A9), `DeepClean.cs` (A10),
-`GpuTools.cs` (A11), `ProcessFreezer.cs` (A12), `PowerPlans.cs` (A13),
-`Profiles.cs` (A14), `SessionHistory.cs` (A15), `SystemMonitor.cs` (A16),
-`Overlay.cs` + `TrayIcon.cs` (A17).
+`StorageCleaner.cs` (A7), `ComponentStore.cs` (A8), `AppCacheCleaner.cs` (A9),
+`DeepClean.cs` (A10), `GpuTools.cs` (A11), `Overlay.cs` + `TrayIcon.cs` (A17).
+
+(Landed in Wave 4: `LogBrowser.cs` A5, `StorageAnalyzer.cs` A6,
+`ProcessFreezer.cs` A12, `PowerPlans.cs` A13, `Profiles.cs` A14,
+`SessionHistory.cs` A15, `SystemMonitor.cs` A16.)
 
 ---
 
@@ -290,19 +314,19 @@ text) beyond the original contract list — LogForm consumes it; A4 builds on it
 | Bootstrap: clone, branch, baseline build, handbook | **A1** | **done** (Wave 1) |
 | Decomposition of `GpuModeSwitch.cs` into module files (zero behavior change) | **A2** (Wave 2) | **done** |
 | Logging rewrite (`Logger.cs` → `Log` contract, per-run files, retention) | **A3** (Wave 3) | **done** |
-| Log window upgrade (per-run files, open-log-folder, richer view) | **A4** | not started |
-| Log browser (`LogBrowser.cs`, browse/list/past logs) | **A5** | not started |
-| Storage analyzer (`StorageAnalyzer.cs`, analyze-first reports) | **A6** | not started |
+| Log window upgrade (per-run files, open-log-folder, richer view) | **A4** | **done** (Wave 4, out-of-tree verified both defines) |
+| Log browser (`LogBrowser.cs`, browse/list/past logs) | **A5** | **done** (Wave 4; menu wiring lands with A18) |
+| Storage analyzer (`StorageAnalyzer.cs`, analyze-first reports) | **A6** | **done** (Wave 4; live read-only smoke run included) |
 | Tier 1 safe cache purger (`StorageCleaner.cs`) | **A7** | not started |
 | Component store analyze + StartComponentCleanup (`ComponentStore.cs`) | **A8** | not started |
 | Per-app browser/app cache cleaner, CACHE-ONLY (`AppCacheCleaner.cs`) | **A9** | not started |
 | Deep clean suite (`DeepClean.cs`) | **A10** | not started |
 | GPU shader-cache tools (`GpuTools.cs`) | **A11** | not started |
-| Background process freezer (`ProcessFreezer.cs`) | **A12** | not started |
-| Ultimate Performance power plan switcher + Windows Update pauser (`PowerPlans.cs`) | **A13** | not started |
-| Named profiles (`Profiles.cs`) | **A14** | not started |
-| Session history (`SessionHistory.cs`) | **A15** | not started |
-| Live system monitor (`SystemMonitor.cs`, panel tab) | **A16** | not started |
+| Background process freezer (`ProcessFreezer.cs`) | **A12** | **done** (Wave 4) |
+| Ultimate Performance power plan switcher + Windows Update pauser (`PowerPlans.cs`) | **A13** | **done** (Wave 4) |
+| Named profiles (`Profiles.cs`) | **A14** | **done** (Wave 4) |
+| Session history (`SessionHistory.cs`) | **A15** | **done** (Wave 4) |
+| Live system monitor (`SystemMonitor.cs`, panel tab) | **A16** | **done** (Wave 4) |
 | Session-only tray menu + overlay (`TrayIcon.cs`, `Overlay.cs`) | **A17** | not started |
 | GO-flow integration of cleanup into Go Time selection stage | **A18** | not started |
 
@@ -422,6 +446,304 @@ commit hash); mark blocked with the reason. Add new rows at the bottom.
     sink, session headers and retention` on `v1.1-logging-cleanup`. Not
     pushed (never push).
 
+- **2026-09-06 — Wave 4 / A4 (Log window upgrade) completed.**
+  - Upgraded `LogForm` in `src\Forms.cs` ONLY (MainForm's
+    `new LogForm(appName)` contract unchanged). The viewer now shows the
+    **live buffer (`Log.Snapshot()`) or any older per-run log**: history
+    ComboBox (DropDownList) populated from `Log.ListLogs(appName)`
+    newest-first with "Current session (live)" pinned on top and the
+    current run's file tagged "(current)"; **Refresh** re-lists and
+    reloads; selecting an older file loads it (`File.ReadAllText`,
+    failure-tolerant with a `Log.Warn`); selecting the live/current entry
+    returns to the live buffer. Severity filter combo (All/Info/Warn/Error)
+    parses the `[LEVEL]` line prefix (space-leading lines are treated as
+    exception continuations of the entry above them); a non-All filter
+    shows matching entries only and the live view re-filters from a fresh
+    snapshot on change. **Find next** searches the displayed text
+    case-insensitively, wraps at the end, highlights via selection
+    (HideSelection=false), Enter in the search box repeats. **Open folder**
+    runs `Process.Start("explorer.exe", "/select,\"" + path + "\"")` for
+    the viewed log. **Copy log** now copies what is displayed (filtered
+    view or selected old file); a second **Copy all** button copies the
+    unfiltered source (three autosize buttons use ~half of the 680 px row
+    — no crowding). Preserved exactly: path strip (now tracks the viewed
+    log), pre-selected text with focus on Shown (Ctrl+C works
+    immediately), monospace read-only viewer, and the deterministic
+    TableLayoutPanel shell (v1.0.19 lesson) — extended to 5 rows (path /
+    history / filter+find / viewer / buttons), all new controls on
+    AutoSize FlowLayoutPanel bars. UI actions logged via `Log.Info`:
+    `log viewer: opened <filename>`, `filter=<label>`,
+    `history refreshed (N saved log(s))`, `open folder <path>`,
+    `find "..." - no match`, copy counts; unreadable file → `Log.Warn`.
+  - **Build verified (out-of-tree harness per parallel-wave rules — repo
+    `src\build.cmd` NOT run by the agent):** entire current `src\` copied
+    to a temp dir; the same two csc invocations produced **zero csc
+    diagnostics, exit code 0** for BOTH `/define:MODE_STANDARD` and
+    `/define:MODE_ECO`. Temp dir deleted afterwards.
+
+- **2026-09-06 — Wave 4 / A5 (Log browser) completed.**
+  - New `src\LogBrowser.cs` — `LogBrowserForm` (dark theme inline colors
+    like Forms.cs, sizable, min 760x520, title "Log History"): LEFT file
+    list of every log from BOTH apps (`Log.LogsRoot` + GoTime / EcoMode,
+    merged and sorted newest first; columns App, File, Size (KB), Last
+    write), RIGHT read-only Consolas viewer in LogForm's style (files over
+    ~2 MB load only their tail with a notice line; text pre-selected on
+    load so Ctrl+C works immediately), toolbar with Find box + Search /
+    Search all logs / Open folder / Copy view / Refresh, and a status/path
+    strip.
+  - Search: "Search" = case-insensitive find-next in the viewed file
+    (wraps around); "Search all logs" = every matching line across all
+    listed logs with file name + line number in a results pane (capped at
+    500 with truncation notice); clicking a hit opens that file in the
+    viewer and selects the hit line. Open folder uses
+    `explorer.exe /select,"<file>"`; Copy view copies the viewer text.
+    Files are opened with FileShare.ReadWrite so the live current log can
+    be viewed while it is written; search-all runs on a ThreadPool thread
+    using the RunBg/SafeInvoke pattern. Logs via `Log.Info`
+    ("log browser: ...").
+  - `LogBrowserForm.ShowBrowser(owner)` opens it non-modal and owned so it
+    never orphans. Class declared `internal` to match every other form in
+    the codebase; the static entry point is public. No other file touched
+    — the Go Time menu entry is Wave 6/A18 as planned, so the form is not
+    reachable from the UI yet (expected).
+  - **Build verified out-of-tree per the parallel-wave rules:** the entire
+    current `src\` copied to a temp dir outside the repo, compiled with
+    the exact `build.cmd` csc commands — `/define:MODE_STANDARD` and
+    `/define:MODE_ECO` each finished with **zero diagnostics** (exit 0).
+    Temp dir deleted afterwards.
+
+- **2026-09-06 — Wave 4 / A6 (Storage analyzer) completed.**
+  - New `src\StorageAnalyzer.cs` (detection/measurement ONLY, strictly
+    read-only): `public class CleanCategory` (`Name`, `Kind`
+    `wu|dism|deepclean|appcache|gpu`, `Bytes`, `Files`, `Notes`,
+    `RiskLabel`, `Selected` — Selected=true for all; the WU download cache
+    and Delivery Optimization categories note that services must be
+    stopped first, final call is the Wave 6 UI's) and
+    `public static class StorageAnalyzer` with `MeasureAll()` (11 fixed
+    categories + up to 7 per-path GPU shader-cache categories, added only
+    when present), `CheckGates()` (elevation via WindowsPrincipal; CBS
+    RebootPending/PackagesPending, WindowsUpdate Auto Update
+    RebootRequired, Session Manager PendingFileRenameOperations, WinSxS
+    pending.xml; WU services wuauserv/bits/UsoSvc/DoSvc/TrustedInstaller
+    busy on Running/StartPending/StopPending — every check fails closed
+    into a block reason) and `GatesSummaryText(reasons)`.
+  - Measurement: recursive size/file-count walks; per-item failures
+    swallowed into `Notes` (5 verbatim samples + "and N more"); missing
+    paths → 0 bytes with a "not present" note; Windows temp applies the
+    7-day rule at the top level; `CbsPersist_*.cab` older than 30 days;
+    reparse points skipped. Long paths enumerated through kernel32
+    `FindFirstFileW`/`GetFileAttributesExW` with the `\\?\` prefix — .NET
+    4.x DirectoryInfo/FileInfo reject that prefix ("Illegal characters in
+    path", caught in the live smoke run, fixed by the P/Invoke walk).
+  - Logging: one `Log.Chan("CLEAN", "measure '<name>': <size> in <N> files
+    [- notes]")` line per category plus the single `gates: N block
+    reason(s)` / `gates: clear` line from `CheckGates()`.
+  - **Verified out-of-tree:** entire `src\` copied to a temp dir, copied
+    `build.cmd` run there — both `/define:MODE_STANDARD` and
+    `/define:MODE_ECO` → zero csc diagnostics ("Build OK:" + both exes,
+    exit 0). Read-only runtime smoke harness (Logger.cs +
+    StorageAnalyzer.cs, no BeginSession, nothing written to disk)
+    returned real measurements (e.g. NVIDIA DXCache 23.15 GB in 279
+    files) and 3 correct gate reasons unelevated. Temp dirs deleted.
+
+- **2026-09-06 — Wave 4 / A12 (Background process freezer) completed.**
+  - New `src\ProcessFreezer.cs` (the only file A12 touched):
+    `public static class ProcessFreezer` + `public struct FreezeResult`
+    (`Suspended`, `Failed`, `SkippedGuarded`, `Summary`). P/Invoke ntdll
+    `NtSuspendProcess` / `NtResumeProcess` (uint NTSTATUS) on handles from
+    `Process.GetProcessesByName` / `GetProcessById`; every per-process
+    step try/caught (a process can exit between listing and opening).
+  - Freeze list: `%LOCALAPPDATA%\GpuModeSwitch\freezelist.txt`, one
+    process name per line (no .exe); tolerant read (empty list on
+    failure); `SeedDefaultListIfMissing()` writes the TrayApps candidate
+    process names from Forms.cs (parsec, googledrivefs, googledrivesync,
+    jellyfin, riotclient, vgtray, vgc), never overwrites;
+    `FreezeSelected()` seeds first so a fresh machine still gets the
+    defaults.
+  - Safety boundary (stated in the class-header comment): static
+    never-freeze guard list (system, smss, csrss, wininit, winlogon,
+    services, lsass, dwm, explorer, audiodg, MsMpEng, SecurityHealthService,
+    plus this suite's "Go Time"/"Eco Mode") + the app's own PID;
+    blank/unreadable names fail closed; resume works ONLY on the PID+name
+    pairs tracked this session, re-checking each PID's current name before
+    resuming (PID-reuse refused and dropped); nothing is ever killed —
+    suspend/resume only; a repeated `FreezeSelected()` skips
+    already-tracked PIDs (never suspended twice); documented Wave 6
+    limitation: processes started after the freeze pass are not frozen
+    this session. Resume-failed entries stay tracked for retry;
+    `ResumeAll()` on an empty session list is a clean zero no-op;
+    `ResumeAllSafe()` never throws (Wave 6 crash/exit paths).
+  - Logging: successes via `Log.Chan("FREEZE", ...)` ("suspended <name>
+    (pid N)" / "resumed <name> (pid N)"), failures as `Log.Warn`.
+  - **Build verified out-of-tree:** entire current `src\` folder copied to
+    a temp dir outside the repo + this file added, compiled with
+    build.cmd's exact csc commands — both define targets with zero
+    diagnostics, `Build OK:` + both exes; temp dir deleted. No live
+    processes touched; suspend/resume is exercised in Wave 6's manual
+    verification.
+
+- **2026-09-06 — Wave 4 / A13 (Power plans + WU pauser) completed.**
+  - New `src\PowerPlans.cs` (namespace `GpuModeSwitch`, two public static
+    classes; compiled into both exe targets, no #if):
+    - `PowerPlans` — `SetUltimate()` / `RestorePrevious()`. Duplicates the
+      hidden Ultimate Performance template (e9a42b02-d5df-448d-aa00-
+      03f14749eb61) via `powercfg -duplicatescheme`, parses the new GUID
+      from stdout (GUID regex), captures the active scheme as "previous"
+      on the first successful run only (never overwritten on re-runs,
+      never the Ultimate GUID itself), persists state BEFORE activating,
+      activates with `powercfg /setactive`. Re-runs reuse the stored
+      created-GUID when `powercfg /query <guid>` exits 0 (else
+      re-duplicate) and skip the setactive when already active.
+      `RestorePrevious()` restores the remembered plan, keeps the
+      created-GUID, clears only the previous field, and is a logged no-op
+      without state. State file
+      `%LOCALAPPDATA%\GpuModeSwitch\powerplan.txt` (dir auto-created;
+      line 1 created-GUID, line 2 previous-GUID) with an in-session memory
+      mirror as read fallback. Helpers: `RunPowercfg` (UseShellExecute=
+      false, CreateNoWindow=true, stdout-then-stderr capture, 30 s wait +
+      kill), `ParseGuid`, `CurrentActiveGuid()`. Every failure →
+      `Log.Error` with the raw powercfg output; nothing throws (bool
+      returns).
+    - `WuPause` — `PauseUpdates()` stops wuauserv, bits, DoSvc
+      (ServiceController, Running/StartPending only, bounded
+      WaitForStatus(Stopped, 15 s); "wu-pause: stopped <name>" / "was
+      already stopped"; WARN on timeout/failure) and records per-service
+      flags only when our Stop() was accepted; `ResumeUpdates()` restarts
+      exactly those (bounded 15 s, "wu-pause: restarted <name>"), clears
+      the flags first, and is a no-op ("wu-pause: nothing to resume") when
+      nothing was recorded. Both methods fully try/caught (exit-path
+      safe). **StartType is never changed** (documented in the file
+      header).
+  - All logging through the POWER channel: "power: ..." / "wu-pause: ...".
+  - **Build verified out-of-tree per the parallel-wave rules** (repo
+    `src\build.cmd` not run by the agent): full current `src\` copied to a
+    temp dir outside the repo plus this new file, build.cmd's exact csc
+    commands executed there — `/define:MODE_STANDARD` exit 0,
+    `/define:MODE_ECO` exit 0, csc silent on both (zero diagnostics).
+    Banned-syntax self-scan (`$"`, `?.`, `=>`, `nameof`, `??=`,
+    `using static`): 0 hits. Temp dir deleted afterwards. Runtime
+    round-trip (actual plan switch / service stop-start) deferred to
+    Wave 6 manual verification.
+
+- **2026-09-06 — Wave 4 / A14 (Named profiles) completed.**
+  - New standalone `src\Profiles.cs` (references only `Log` +
+    `System.Web.Extensions`; no Forms.cs types), three public types:
+    - `Profile` — `Name` + `Selections` (`Dictionary<string,bool>`),
+      parameterless ctor for the serializer.
+    - `ProfileStore` (static) — JSON store at
+      `%LOCALAPPDATA%\GpuModeSwitch\profiles.json` (array of
+      `{Name, Selections}`) through the already-referenced
+      JavaScriptSerializer; `LoadAll()` keeps file order; `SaveAll` full
+      rewrite (serialize → `File.WriteAllText`, failures → `Log.Error` +
+      false); `Save` upserts by exact name (replace in place, else append)
+      and logs `[PROFILE] profile saved: <name> (N keys)`; `Delete` logs
+      `[PROFILE] profile deleted: <name>`; `Find` exact match, always
+      fresh; missing/corrupt file → empty list + one WARN; plus a
+      `FilePath` property.
+    - `ProfileBar : UserControl` — dark horizontal bar (Profile label,
+      DropDownList combo, Apply / Save... / Delete / Refresh) with
+      `ApplyRequested` + `Saved`
+      (`Action<string, Dictionary<string,bool>>`) and `CollectSelections`
+      (`Func<Dictionary<string,bool>>`, raised by Save for the host's
+      current checkbox state). Apply reads the selected profile fresh from
+      the store (no selection → warn, never fires); Save names it via the
+      dark `ProfileNameDialog` modal (default = combo text or "New
+      profile", empty name keeps it open); Delete confirms Yes/No;
+      `Reload()` re-lists from the store. Every action logs through
+      `Log.Chan("PROFILE", ...)`.
+  - **Build verified out-of-tree** (parallel-wave rules; repo `build.cmd`
+    NOT run): entire `src\` copied to a temp dir + `Profiles.cs`,
+    build.cmd's two csc commands run per target — MODE_STANDARD exit 0 /
+    zero diagnostics, MODE_ECO exit 0 / zero diagnostics. Temp harness
+    deleted. File is pure ASCII — the Save button reads "Save..." with
+    three ASCII dots (no BOM issues with csc).
+
+- **2026-09-06 — Wave 4 / A15 (Session history) completed.**
+  - New `src\SessionHistory.cs` (only file touched): `SessionRecord`
+    (public fields, serializer round-trip ctor); `static SessionHistory` —
+    append-only `%LOCALAPPDATA%\GpuModeSwitch\sessions.jsonl` (one
+    JavaScriptSerializer object per line; Append never throws — failures
+    go to `Log.Error`, success logs
+    `Log.Chan("SESSION", "session recorded: <App> <Mode> - <Result>
+    (N action(s), <space summary>)")` with a B/KB/MB/GB FormatBytes
+    summary); `ReadAll` (corrupt lines skipped, WARNs capped at 3,
+    timestamps normalized to UTC, newest first, missing file = empty
+    list); `ExportText` (human-readable blocks: local timestamp, app,
+    mode, result, duration, bulleted actions, space freed per category +
+    total); public `FormatBytes(long)` helper. `SessionHistoryForm`
+    ("Session History", dark LogForm/LogBrowser recipe — TableLayoutPanel
+    shell over a horizontal SplitContainer, min 720x480): ListView (When
+    local/App/Mode/Result/Freed/Errors, newest first) + Refresh, read-only
+    detail pane re-rendering the selected record's ExportText (pre-selected
+    on load so Ctrl+C works immediately), "Export .txt" (SaveFileDialog;
+    selected record or all when none selected) and "Copy". Entry point
+    `public static void ShowHistory(Form owner)` — non-modal, owned (plain
+    Show if the owner is gone). Compiles into both exe targets; A18 wires
+    the entry (Wave 6).
+  - **Build verified (out-of-tree harness):** copied the entire current
+    `src\` (incl. all parallel Wave 4 files) to a temp dir outside the
+    repo, added `src\SessionHistory.cs`, compiled BOTH `/define` targets
+    with build.cmd's csc commands — zero diagnostics per target (csc
+    silent, exit 0 for MODE_STANDARD and MODE_ECO; the copied `build.cmd`
+    printed `Build OK:` + both exes). Temp dir deleted; no runtime writes
+    (no `sessions.jsonl` created this wave).
+
+- **2026-09-06 — Wave 4 / A16 (Live system monitor) completed.**
+  - Created `src\SystemMonitor.cs` (947 lines, new file only):
+    - `MonitorSample` — public-field DTO (`CpuPercent`, `RamUsedBytes`/
+      `RamTotalBytes`, `DiskActivePercent`, `GpuPercent`, `GpuTempC`,
+      `CpuTempC`, `HasGpu`/`HasGpuTemp`/`HasCpuTemp`, `Timestamp`) plus
+      `RamText` ("4.2 / 16.0 GB", invariant culture).
+    - `MonitorEngine` (static) — System.Windows.Forms.Timer (default
+      2000 ms, 250 ms floor) so every sample arrives on the UI thread for
+      both the panel and the Wave 5 overlay (marshaling decision
+      documented in the file header); `event Action<MonitorSample>
+      SampleReady` per tick, `LastSample`/`Running`, `RunOnce()` for
+      tests. CPU = "\Processor(_Total)\% Processor Time", Disk =
+      "\PhysicalDisk(_Total)\% Disk Time" — created once, primed with one
+      discarded NextValue, disposed on Stop, recreated + re-primed on
+      re-Start. RAM via kernel32 GlobalMemoryStatusEx P/Invoke
+      (MEMORYSTATUSEX in-file). GPU via nvidia-smi resolved once per
+      session (C:\Windows\System32 → C:\Program Files\NVIDIA
+      Corporation\NVSMI → PATH), run hidden with a 2.5 s timeout, first
+      "util, temp" CSV line parsed (temp "N/A" handled); absent/failed →
+      HasGpu=false, CPU LoadPercentage never faked into GPU. CPU temp via
+      WMI root\WMI MSAcpi_ThermalZoneTemperature (tenths of Kelvin →
+      Celsius, hottest plausible zone). Every metric individually
+      try/caught, keeps last-known on failure; the two unavailability
+      lines ("monitor: gpu metrics unavailable (no nvidia-smi)" /
+      "monitor: cpu temp unavailable (MSAcpi_ThermalZoneTemperature)") log
+      exactly once per session — never spam. Lifecycle logs
+      "monitor: started (N ms)" / "monitor: stopped" through
+      Log.Chan("MONITOR").
+    - `MonitorPanel : UserControl` — dark theme (inline palette per the
+      Theme.cs convention), deterministic TableLayoutPanel (LogForm
+      pattern): 3 columns x 7 rows, Label + ProgressBar + value per metric
+      ("N/A" rows bar at 0), "updated HH:mm:ss" footer, min 360x180,
+      resizable. Bars render dark via uxtheme SetWindowTheme("","")
+      classic mode, re-applied on HandleCreated. AttachToEngine/
+      DetachFromEngine manage the SampleReady subscription (attach paints
+      MonitorEngine.LastSample immediately); Dispose detaches; updates
+      guard with InvokeRequired so a worker-thread RunOnce cannot cross
+      threads.
+  - **Verified out-of-tree** (parallel-wave rules; repo build.cmd
+    untouched, nothing run in-repo by the agent): entire current `src\`
+    copied to a temp dir and compiled with build.cmd's exact csc commands
+    (csc 4.8.9221.0 for C# 5): `Build OK:` + both exes, exit 0, and both
+    per-target csc runs exited 0 with zero output. First harness run
+    (13 .cs files) and a re-run after SessionHistory.cs landed (14 .cs
+    files) both passed. Both temp harness dirs deleted afterwards.
+    Compile verification only — no counters exercised at runtime this
+    wave.
+
+- **2026-09-06 — Wave 4 integrated (orchestrator).**
+  - Ran the integrated in-repo build for the first time with all 14 source
+    files: `cmd //c "src\build.cmd"` → exit 0, zero csc diagnostics,
+    `Build OK:` + `Eco Mode.exe` (177,152 bytes) and `Go Time.exe`
+    (183,808 bytes). All eight Wave-4 files present in `git status`
+    (`M src/Forms.cs`, 7 new files). Handbook §3/§5/§6 updated from the
+    agents' paste-ready blocks; §8 rewritten for Wave 5.
+
 ---
 
 ## §7 Build & verify (exact commands)
@@ -456,48 +778,87 @@ reference — fix the code, never change the compiler or add references outside
 
 ## §8 Next steps
 
-1. **Wave 3 — A3 (logging rewrite): DONE** (see §5/§6). `src\Logger.cs`
-   now implements `static class Log` exactly per D1/D8; the full Log API
-   table lives in §3. All later modules log through `Log.Info` / `Log.Warn` /
-   `Log.Error` / `Log.Chan(channel, msg)` with the channels CLEAN, GPU,
-   FREEZE, POWER, TRAY, MONITOR, PROFILE, SESSION; new log-adjacent UI reads
-   `Log.Snapshot()` / `Log.CurrentLogPath` / `Log.LogsRoot` /
-   `Log.ListLogs(app)` (newest first).
+1. **Waves 1–4 — DONE** (see §5/§6): bootstrap, decomposition, logging core
+   (`Log` contract in §3 — all modules log through `Log.Info` / `Log.Warn` /
+   `Log.Error` / `Log.Chan(channel, msg)`), and eight feature modules
+   (log window, log browser, storage analyzer, process freezer, power plans +
+   WU pauser, profiles, session history, monitor engine + panel). The
+   integrated in-repo build of all 14 source files passed with zero
+   diagnostics on both `/define` targets.
 
-2. **Wave 4 — one feature per agent, in this order:**
+2. **Wave 5 — cleaners/tools, one feature per agent (parallelizable; each
+   owns exactly one new file):**
 
-   - **A4 — Log window upgrade (Forms.cs `LogForm` ONLY):** richer viewer
-     over the existing `Log` API (`Snapshot()`, `CurrentLogPath`,
-     `LogsRoot`) — per-run awareness, an **open log folder** action, richer
-     view. No other Forms.cs changes; no new file.
-   - **A5 — Log browser:** new `src\LogBrowser.cs`, `static
-     ShowBrowser(Form owner)`; browse/list past runs via `Log.ListLogs(app)`
-     (newest first) and open/view a selected log file.
-   - **A6 — Storage analyzer:** new `src\StorageAnalyzer.cs`; class
-     `CleanCategory { Name, Kind, Bytes, Files, Notes, RiskLabel, Selected }`
-     plus `CheckGates()` (D7 gates: pending reboot / WU installing / not
-     elevated). **Analyze-first, no deletion in this module.**
-   - **A12 — Process freezer:** new `src\ProcessFreezer.cs`; ntdll
-     `NtSuspendProcess` / `NtResumeProcess` P/Invoke; freeze set from
-     `freezelist.txt`; a **never-freeze guard** for critical/system
-     processes (and never this app's own process). Logs through the FREEZE
-     channel.
-   - **A13 — Power plans + WU pauser:** new `src\PowerPlans.cs`; Ultimate
-     Performance plan switching (powrprof) and Windows Update pause
-     (registry/Policy). Logs through the POWER channel.
-   - **A14 — Named profiles:** new `src\Profiles.cs` + `ProfileBar`
-     UserControl; persisted as `profiles.json` (parse with the already
-     referenced `System.Web.Extensions` JavaScriptSerializer or a minimal
-     reader).
-   - **A15 — Session history:** new `src\SessionHistory.cs`; append-only
-     `sessions.jsonl` next to the logs; `SessionHistoryForm` viewer. Logs
-     through the SESSION channel.
-   - **A16 — Live system monitor:** new `src\SystemMonitor.cs` +
-     `MonitorPanel` UserControl; samples only while visible (D6). Logs
-     through the MONITOR channel.
+   - **A7 — Tier 1 cleaner:** new `src\StorageCleaner.cs`. Input: selected
+     `CleanCategory` list (from `StorageAnalyzer.MeasureAll()`). WU purge:
+     record service states → stop `usosvc→wuauserv→bits` → delete
+     **children** of `SoftwareDistribution\Download` (never the folder) →
+     restart `bits→wuauserv→usosvc` → `DetectNow()` via ProgID
+     `Microsoft.Update.AutoUpdate`. DO cache via
+     `powershell -NoProfile -Command "Delete-DeliveryOptimizationCache
+     -Force"` (never `-IncludePinnedFiles`). Temp/WER/CBS/log deletions;
+     skip+log locked files; tally bytes freed per category + before/after
+     `DriveInfo` free space. HARD GUARD (D7): never touch WinSxS contents,
+     catroot, catroot2, `C:\Windows\Installer`, Servicing, pending.xml.
+     Refuse to run when `StorageAnalyzer.CheckGates()` returns reasons.
+     Logs through CLEAN.
+   - **A8 — Component store (Tier 2):** new `src\ComponentStore.cs`.
+     `Analyze()`: run `Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore`
+     hidden, parse "Component Store Cleanup Recommended" + sizes.
+     `RunCleanup()`: `/StartComponentCleanup` ONLY — `/ResetBase` is
+     explicitly FORBIDDEN (D3). Stream progress to CLEAN; error 1726 =
+     retryable warning; never run when gates fail.
+   - **A9 — App cache cleaner (CACHE-ONLY, D5):** new
+     `src\AppCacheCleaner.cs`. Targets: Chrome/Edge/Firefox/Brave/Opera/
+     Vivaldi (%LOCALAPPDATA% cache dirs), Steam (appcache/shadercache),
+     Discord (Cache, Code Cache), Epic (webcache), Battle.net (Cache) —
+     name, paths, process names each. `Measure()` / `Clean(selected)`;
+     running-process warn list. HARD EXCLUSION (enforced): only cache-named
+     dirs are ever enumerated/deleted — Cookies, History, Login Data,
+     Sessions, Bookmarks, Local Storage, places.sqlite, cookies.sqlite are
+     untouchable. Logs through CLEAN.
+   - **A10 — Deep clean:** new `src\DeepClean.cs`. `%TEMP%` (unlocked),
+     `C:\Windows\Temp` (>7d), MEMORY.DMP + Minidump, WER trees,
+     thumbnail/icon caches (Explorer locks — skip+log), old setup/upgrade
+     logs. Reuse `CleanCategory`; shader caches NOT here (A11 owns). Logs
+     through CLEAN.
+   - **A11 — GPU tools:** new `src\GpuTools.cs`. Shader caches: NVIDIA
+     DXCache/GLCache, ProgramData NV_Cache, AMD DxCache/Dx9Cache/GLCache,
+     D3DSCache — measure + clean (skip locked). Driver leftovers:
+     `C:\NVIDIA`, `ProgramData\NVIDIA Corporation\Downloader` — measure +
+     clean with confirm flag. HAGS: read/write
+     `HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\HwSchMode`
+     (2=on/1=off), current state + reboot note. Logs through GPU.
+   - **A17 — Overlay + session tray:** new `src\Overlay.cs` +
+     `src\TrayIcon.cs`. Overlay: frameless TopMost semi-transparent
+     ~260×120 form bound to `MonitorEngine.SampleReady`/`LastSample`,
+     click-drag movable, Show/Toggle/Close. Tray: session-only `NotifyIcon`
+     shown after GO applies — menu: Open window / Eco Mode (restore) /
+     Overlay toggle / Status balloon / Exit; Hide on restore/exit; icon
+     drawn in code. Logs through TRAY/MONITOR.
 
-   After Wave 4 the remaining waves per §5: A7/A8/A9/A10/A11 cleaners/tools,
-   then A17 tray/overlay, then A18 GO-flow integration. Each agent: build
-   after your change (`cmd /c "src\build.cmd"` from repo root, both targets
-   zero diagnostics), update §5/§6, append decisions to §4, commit with a
-   conventional message, never push.
+3. **Wave 6 — A18 (GO-flow integration, docs, final verification):** wire
+   all module APIs into `Forms.cs` + `App.cs` (read each module's §3 rows
+   first). Selection stage adds: **Performance** checkboxes (freeze apps w/
+   `ProcessFreezer.GetUserList()` picker, Ultimate plan via `PowerPlans`,
+   pause WU via `WuPause`); **Storage cleanup** group (Tier 1 purge,
+   component store, deep clean, per-app cache checkboxes) populated with
+   `StorageAnalyzer.MeasureAll()` sizes on stage open — `CheckGates()`
+   checked, blocked items disabled with reason; `MonitorPanel` section;
+   `ProfileBar`. GO executes freezer → plan → WU pause → cleanup, logs +
+   `SessionHistory.Append`; result stage shows space-freed summary + buttons
+   Log History (`LogBrowserForm.ShowBrowser`) / Session History
+   (`SessionHistoryForm.ShowHistory`) / View log / Copy log. Eco Mode:
+   `ProcessFreezer.ResumeAll()` + `PowerPlans.RestorePrevious()` +
+   `WuPause.ResumeUpdates()` + tray hide. Version 1.1.0 in App.cs; README:
+   version-history entry + feature docs + logging/retention section +
+   cleanup safety model + pointer to this handbook. Final verify: build both
+   exes, analyze-only dry run, retention prune check, log browser + filter +
+   search, Copy log in both apps, Eco round-trip.
+
+Parallel-wave rule (as used in Wave 4): agents in the same wave own
+disjoint files, verify out-of-tree in a temp-dir harness (never run the
+in-repo `src\build.cmd` while other agents are mid-write), report
+HANDBOOK-UPDATE blocks instead of editing the handbook, and never commit —
+the orchestrator runs the integrated build, applies handbook updates, and
+commits once per wave with a detailed message.

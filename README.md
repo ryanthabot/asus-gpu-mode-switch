@@ -9,6 +9,63 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.1.0** — **the session suite**: logging rewrite, storage cleanup,
+> performance features, session tray + overlay, named profiles, session
+> history and a live system monitor — all inside the same two executables.
+>
+> - **Logging rewrite**: every run writes its own timestamped log file to
+>   `%LOCALAPPDATA%\GpuModeSwitch\logs\GoTime\` / `...\EcoMode\`
+>   (`<App>_yyyy-MM-dd_HHmmss.log`). Retention: files older than **30 days**
+>   are pruned, then oldest-first until the folder is ≤ **200 MB** (today's
+>   logs and the current run's log are never deleted). The **View log**
+>   window gained a history dropdown (past per-run logs), a severity filter
+>   (All/Info/Warn/Error), find-next and an *Open folder* button; the
+>   **Log History** browser lists and searches every log from both apps;
+>   *Copy log* still copies the displayed log with one click. See the
+>   [Logging](#logging) section below.
+> - **Storage cleanup (Go Time selection stage)**: *Windows Update cache
+>   purge* (stop wuauserv/bits/UsoSvc → purge `SoftwareDistribution\Download`
+>   children → restart → re-detect; Delivery Optimization cache via the
+>   official PowerShell cmdlet; old update log archives), *Component store
+>   cleanup* through `DISM /StartComponentCleanup` (analyze-first, always),
+>   *Deep clean* (aged per-user error reports, setup & upgrade logs) plus the
+>   tier-1 targets (Windows temp >7 days, WER archives, user temp, crash
+>   dumps, Explorer thumbnail caches), *GPU shader caches* (NVIDIA/AMD/
+>   D3DSCache) and per-app browser/launcher caches — **CACHE-ONLY**
+>   (cookies, history, passwords, sessions, bookmarks and every other
+>   personal-data store are never touched). Everything is **analyze-first**:
+>   sizes are measured in the background before GO and shown on the
+>   checkboxes; safety gates (pending reboot, Windows Update busy, not
+>   elevated) disable the whole group with the reasons shown. Never touched:
+>   `WinSxS` (read/analyzed via DISM only), `catroot`/`catroot2`,
+>   `C:\Windows\Installer`, the Servicing folder, `pending.xml`.
+>   `DISM /ResetBase` and Windows.old removal are **deliberately not
+>   offered** (Windows.old is measured and reported, never deleted).
+> - **Performance features**: a background **process freezer** (suspend/resume
+>   the apps in an editable freeze list for the session — nothing is ever
+>   killed, and a never-freeze guard protects critical processes), the
+>   **Ultimate Performance** power plan (the previous plan is remembered and
+>   restored) and a **session-scoped Windows Update pause** (StartType never
+>   changed, exactly what was stopped is restarted).
+> - **Session tray + overlay**: after a successful GO a tray icon appears
+>   (Open Go Time / Restore / Toggle overlay / Status / Exit) and a compact
+>   click-draggable **overlay** shows live CPU/RAM/disk/GPU numbers over the
+>   game. The tray lives only for the session — nothing autostarts.
+> - **Named profiles**: save and re-apply every checkbox on the selection
+>   stage (optimizations, tray apps, performance, cleanup) by name.
+> - **Session history**: every GO run is recorded (actions applied, space
+>   freed per category, duration, errors) and browsable via the
+>   **Session History** viewer.
+> - **Live system monitor**: an expandable monitor panel (CPU/RAM/disk/GPU/
+>   temps) inside Go Time, also feeding the overlay.
+>
+> **`--auto` semantics (unchanged):** `--auto` skips the selection stage and
+> applies ONLY the v1.0.22 set — system optimizations + GPU switch. The
+> performance and storage-cleanup features **never run unattended**: freezing
+> other apps' processes, switching power plans, pausing Windows Update and
+> deleting files always require the explicit GO click. Cleanup checkboxes are
+> unticked by default.
+>
 > **v1.0.22** — **launch-time selection stage in Go Time**: after probing,
 > Go Time shows **two toggle groups** and waits for **GO**:
 > - **System optimizations** — Game Mode, do-not-disturb, Game DVR recording
@@ -172,8 +229,8 @@ for **one** restart — after that, switching is instant every time.
 
 **When something goes wrong:** click **View log** in the app — it shows every
 probe, read and write with raw hex values. *Copy log* puts it on the clipboard
-so you can paste it into a bug report. The same log is written to
-`%LOCALAPPDATA%\GpuModeSwitch\EcoMode.log` (or `GoTime.log`).
+so you can paste it into a bug report. Each run also writes its own log file —
+see the [Logging](#logging) section.
 
 Run either app with `--status` (e.g. from a terminal) to see the detected
 hardware interface and the current GPU state without switching anything.
@@ -207,6 +264,51 @@ References: the [Linux kernel `asus-wmi` driver](https://github.com/torvalds/lin
 (which documents these device IDs) and [G-Helper](https://github.com/seerge/g-helper)
 (the open-source ASUS control app that uses the same interface on Windows).
 
+## Logging
+
+Since v1.1.0 every run writes its own timestamped log file:
+
+```
+%LOCALAPPDATA%\GpuModeSwitch\logs\GoTime\Go Time_yyyy-MM-dd_HHmmss.log
+%LOCALAPPDATA%\GpuModeSwitch\logs\EcoMode\Eco Mode_yyyy-MM-dd_HHmmss.log
+```
+
+- Each log line reads `yyyy-MM-dd HH:mm:ss.fff [LEVEL] (channel) message`
+  with LEVEL = INFO/WARN/ERROR and an optional channel tag (CLEAN, GPU,
+  FREEZE, POWER, TRAY, MONITOR, PROFILE, SESSION).
+- **Retention:** on every session start, files older than **30 days** are
+  deleted, then oldest-first until the folder is ≤ **200 MB** total. Files
+  stamped today and the current run's log are never deleted.
+- **Finding logs:** the in-app **View log** window shows the live log of the
+  current run plus every past per-run log (history dropdown, severity filter,
+  find-next, *Open folder*). The **Log History** button (result stage) opens
+  a browser over all logs of both apps with *Search all logs*. *Copy log*
+  copies the displayed text, *Copy all* the whole unfiltered source.
+- If a log file cannot be written (permissions, disk), the file sink disables
+  itself for that run with a single warning — the in-memory buffer and the
+  Copy buttons keep working.
+
+The full agent-facing build/handoff documentation (module map, design
+decisions, verification evidence) lives in [`docs/HANDBOOK.md`](docs/HANDBOOK.md).
+
+## Storage cleanup & session features (safety model)
+
+- **Analyze-first, always:** sizes are measured read-only before anything can
+  be selected; the cleaners re-measure and re-check the safety gates
+  (pending reboot / Windows Update busy / not elevated) right before
+  deleting — any reason blocks everything and is logged.
+- **Cache-only app cleaning:** only whitelisted cache folder names
+  (`Cache`, `Code Cache`, `GPUCache`, `shadercache`, `cache2`, …) under the
+  explicit per-app parent directories are candidates, and a second
+  forbidden-name wall (cookies, history, logins, bookmarks, local storage,
+  …) is re-checked before any enumeration or delete.
+- **Session-scoped features are reversible:** the freezer only suspends
+  (never kills) and resumes exactly what it suspended; the power plan
+  restore returns the plan that was active before; the WU pause restarts
+  only the services this process stopped and never changes StartType.
+  Everything is also restored on Eco Mode, on errors and on exit.
+- **`--auto` never touches any of this** — see the v1.1.0 notes above.
+
 ## Troubleshooting
 
 - **"ASUS hardware interface not found"** — the ASUS System Control Interface
@@ -232,13 +334,22 @@ so no Visual Studio or .NET SDK is needed.
 
 ```
 asus-gpu-mode-switch/
-├── src/
-│   ├── GpuModeSwitch.cs   ← single source, both apps
+├── src/                    ← all *.cs files compile into BOTH apps
+│   │                          (MODE_STANDARD -> "Go Time.exe",
+│   │                           MODE_ECO -> "Eco Mode.exe")
+│   ├── App.cs … TrayIcon.cs (20 module files; see docs/HANDBOOK.md §3
+│   │                          for the full module map)
 │   ├── app.manifest       ← requires administrator
 │   └── build.cmd          ← builds dist\Go Time.exe + dist\Eco Mode.exe
+├── docs/HANDBOOK.md       ← architecture, design decisions, build evidence
+├── BUILD_NOTES.md         ← verification evidence per wave
 ├── LICENSE (MIT)
 └── README.md
 ```
+
+> The v1.1.0 development was driven by an 18-agent build documented in
+> `docs/HANDBOOK.md` — start there if you want to understand or extend the
+> codebase (per-module APIs, D1–D9 design decisions, cleanup safety model).
 
 ## Limitations
 

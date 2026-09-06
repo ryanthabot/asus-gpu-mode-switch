@@ -103,3 +103,157 @@ asus-gpu-mode-switch/
 - The v1.1 plan of record (features, safety gates, design decisions) lives in
   `docs\HANDBOOK.md`. **Read it before touching any source file**, and append
   to its §4/§6 rather than rewriting.
+
+---
+
+# Wave 6 verification (A18 — GO-flow integration, final agent)
+
+- **Date:** 2026-09-06
+- **Commit:** `7841c88` `feat(go-flow): wire Wave 4-6 modules into the apps (selection stage v1.1, GO session chain, session tray, eco-safe restore)` on `v1.1-logging-cleanup` (not pushed — never push)
+- **Files changed:** `src\Forms.cs` (+1,314/−63 lines incl. new `SessionSafety`, `FreezeListEditorForm`, selection-stage v1.1, GO session chain, session tray/overlay, result-stage buttons), `src\App.cs` (Version 1.1.0, unhandled-exception hooks)
+
+## Integrated build (both targets, zero diagnostics)
+
+```
+cmd //c "src\build.cmd"        (from repo root)
+Build OK:
+Eco Mode.exe
+Go Time.exe
+EXIT=0
+```
+
+csc (`C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`, banner 4.8.9221.0
+"for C# 5") printed **nothing** — zero errors, zero warnings — for BOTH
+`/define:MODE_STANDARD` and `/define:MODE_ECO`.
+
+| Artifact | Size (bytes) | previous wave |
+|---|---|---|
+| `dist\Go Time.exe` | 292,864 | 270,336 |
+| `dist\Eco Mode.exe` | 265,216 | 263,680 |
+
+## Static checks
+
+- C# 5 banned-syntax scan over all of `src\`: `$"` interpolation — **0 hits**;
+  `?.` null-conditional — **0 hits**; `nameof` — **0 hits**; `=>` (lambda OR
+  expression-bodied) — **0 hits**. (`grep -c` per file, no non-zero counts.)
+- Define split proven in the binaries by UTF-16 string scan (PowerShell
+  `[Text.Encoding]::Unicode.GetString`, both byte alignments):
+  "Freeze background apps", "Ultimate Performance plan", "Pause Windows
+  Update", "Windows Update cache purge", "Component store cleanup (DISM)",
+  "Deep clean", "GPU shader caches", "Edit list...", "Cleanup unavailable:",
+  "report only - never deleted", "session tray created", "profile applied" —
+  all present **only** in `Go Time.exe`. ("Ultimate Performance plan",
+  "Log History", "Session History", "Profile:" also decode in Eco Mode.exe —
+  expected: those live in PowerPlans/LogBrowser/SessionHistory/Profiles
+  strings that compile into both targets.)
+
+## Reachability wiring points (code inspection, `src\Forms.cs` line refs)
+
+| Feature | Wiring point |
+|---|---|
+| View log (LogForm, Copy log inside) | `MainForm` ctor `_logBtn.Click` → `new LogForm("Go Time").ShowDialog(this)` (Forms.cs ~1114) |
+| Log History browser | `_histBtn.Click` → `LogBrowserForm.ShowBrowser(this)` (Forms.cs ~1127) |
+| Session History viewer | `_sessBtn.Click` → `SessionHistoryForm.ShowHistory(this)` (Forms.cs ~1130) |
+| ProfileBar | ctor `_profileBar.CollectSelections += CollectAllSelections` / `ApplyRequested += ApplyProfileSelections` (Forms.cs ~1253); shown in the select panel top row |
+| MonitorPanel | select panel; `AttachToEngine` at select show + monitor toggle (Forms.cs ~1339/1640); `MonitorEngine.Start(2000)` in `EnsureMonitorEngine` (~2348) |
+| SessionTray | `AfterGoSuccess()` → `new SessionTray(...)` + `Show("Go Time session active")` (Forms.cs ~2335) |
+| MonitorOverlayForm | `ToggleOverlay()` → `new MonitorOverlayForm()` + `Attach()` + `Show()` (Forms.cs ~2403) |
+| GO session chain | `RunGoSession()` — `ProcessFreezer.FreezeSelected` (~2077), `PowerPlans.SetUltimate` (~2099), `WuPause.PauseUpdates` (~2127), `StorageCleaner.Clean` (~2176), `ComponentStore.RunCleanup` (~2195), `DeepClean.Clean` (~2233), `GpuTools.Clean(meas, false, ...)` (~2255), `AppCacheCleaner.Clean` (~2274); `SessionHistory.Append` (~2031) |
+| Eco-safe restore | `SessionSafety.RestoreAll()` — Eco apply (Forms.cs ~1999), tray restore (~2359), tray exit (~2388), `RunBg` catch (~2561), `FormClosed` (~1301), `App.cs` ThreadException/UnhandledException (~165/170) |
+| Freeze list editor | `_editFreezeList.Click` → `FreezeListEditorForm.ShowDialog(this)` (seed + GetUserList/SaveUserList + IsGuarded feedback) |
+
+## Analyze-only dry run (out-of-tree harness — NO deletion calls)
+
+Harness: temp dir outside the repo, `DryRun.cs` calling only
+`StorageAnalyzer.MeasureAll/CheckGates`, `DeepClean.Measure`,
+`GpuTools.Measure`, `AppCacheCleaner.Measure/Targets` — **no `Clean()` call
+exists in the harness** (grep-verifiable), never calls `Log.BeginSession` so
+it writes nothing to disk (verified: no log files created). Compiled with the
+same framework csc; ran unelevated (no UAC). Results (2026-09-06, this
+machine, unelevated):
+
+```
+StorageAnalyzer.MeasureAll(): 13 categories
+  [wu]  Windows Update download cache      16.2 MB / 4 files
+  [wu]  Delivery Optimization cache        0 B (not present)
+  [deepclean] Windows temp (>7 days)       0 B (C:\Windows\Temp not enumerated unelevated)
+  [deepclean] Windows error reports        0 B
+  [wu]  Old update log archives            19.8 MB / 67 files
+  [wu]  Update reporting log               682.7 KB / 1 file
+  [deepclean] User temp files              522.3 MB / 702 files
+  [deepclean] Crash dumps                  0 B (Minidump not enumerated unelevated)
+  [deepclean] Thumbnail caches             214.8 MB / 30 files
+  [gpu] NVIDIA shader cache (DXCache)      23.15 GB / 279 files
+  [gpu] NVIDIA shader cache (GLCache)      64 B / 2 files
+  [gpu] AMD shader cache (DxCache)         48.9 MB / 669 files
+  [gpu] DirectX shader cache (D3DSCache)   192.4 MB / 232 files
+
+DeepClean.Measure(): 3 categories
+  Per-user error reports                   0 B (not present)
+  Setup & upgrade logs                     1.1 MB / 1 file (Panther setup.etl)
+  Previous Windows installations (REPORT ONLY) 549.88 GB / 81,752 files
+    (Windows.old 549.88 GB + $WINDOWS.~WS 361.6 KB; $WINDOWS.~BT not present;
+     never deleted anywhere in the suite - D3 Tier 3)
+
+GpuTools.Measure(): 4 categories (identical sizes to the analyzer - paths cross-validated)
+AppCacheCleaner.Measure(): 6 present targets
+  Chrome 10.9 MB, Edge 352.5 MB, Brave 1.27 GB (app running), Steam 658.9 MB
+  (app running), Discord 346.4 MB (app running), Battle.net 67.3 MB
+AppCacheCleaner.Targets(): 10 targets, 6 with resolved cache dirs
+  (Vivaldi, Opera, Firefox, Epic Games Launcher resolve empty -> no checkbox)
+
+StorageAnalyzer.CheckGates(): 3 block reasons (unelevated harness, correct):
+  - not running elevated
+  - PendingFileRenameOperations pending (reboot needed)
+  - WU service UsoSvc Running
+```
+
+Temp harness dir deleted afterwards. Expect the numbers above to change as
+the machine is used; the elevated app will also enumerate `C:\Windows\Temp`
+and `Minidump` (harness could not, unelevated).
+
+## MANUAL VERIFICATION CHECKLIST (UAC-gated — cannot be automated)
+
+The exes carry `requireAdministrator`, so each step below pops a UAC prompt
+and must be done interactively by a human:
+
+1. [ ] `Go Time.exe --status` — MessageBox shows the detected transport,
+       dGPU/MUX state; no switch happens; a new log file appears under
+       `%LOCALAPPDATA%\GpuModeSwitch\logs\GoTime\`.
+2. [ ] Launch `Go Time.exe` — selection stage shows: Profile bar on top,
+       precheck text, System optimizations, Tray apps detected (Scanning... →
+       running states), Performance group (Freeze/Plan/WU-pause + Edit
+       list...), Storage cleanup group with measured sizes on the captions,
+       "(app running)" suffixes, Windows.old "report only" note, gate
+       warning + disabled cleanup boxes if any gate blocks, collapsible
+       system monitor at the bottom (expand → live bars).
+3. [ ] Profiles: Save... a profile, change checkboxes, Apply it — every
+       checkbox round-trips; Delete/Refresh work; unknown keys (hand-edit
+       profiles.json) are ignored with a log line.
+4. [ ] Freeze list editor: open "Edit list...", add "notepad.exe" (becomes
+       "notepad"), add "explorer" → refused with the protected-names
+       message; Save → freezelist.txt updated; reopen shows the saved list.
+5. [ ] Real GO run with "Freeze background apps" + one cleanup box ticked:
+       GPU switches, detail shows freeze/plan/WU one-liners + cleanup
+       summary block, per-category freed lines and the total; session tray
+       appears ("Go Time session active"); Session History shows the record
+       with freed bytes; Log History opens the browser; Copy log works.
+6. [ ] Tray menu: double-click opens the window; Status shows the balloon
+       with dGPU state + CPU/RAM; Toggle overlay shows the draggable
+       overlay (drag it, verify live updates); Restore runs the eco-safe
+       restore (frozen apps resume, power plan back, WU resumed, tray
+       disappears); Exit closes the app cleanly.
+7. [ ] Eco round-trip: run `Eco Mode.exe` after a Go Time session — the
+       switch applies AND the eco-safe restore runs (log line
+       "restore: eco-safe session restore done"; no frozen process, no
+       foreign power plan, wuauserv/bits/DoSvc back Running).
+8. [ ] Abnormal-exit safety: kill `Go Time.exe` from Task Manager
+       mid-session (after freezing) → the next Eco Mode apply (or any Go
+       Time run/exit) resumes the frozen apps and restores plan/WU.
+9. [ ] Log retention: drop a 150 MB + a 100 MB fake log older than today
+       into the app's log folder, start the app → oldest pruned with
+       "retention: removed ... (size cap 200 MB)" lines; today's files and
+       the current log survive.
+10. [ ] Log browser: search a term across all logs; click a hit → opens
+       that file at the line; Open folder selects the file in Explorer.
+       Filter + find-next + Copy log / Copy all inside View log.

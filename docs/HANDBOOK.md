@@ -3,7 +3,8 @@
 This is the handoff document for the 18-agent v1.1.0 build. **Any agent on any
 computer**: clone the repo, read this file top to bottom, then work your wave.
 Keep it current — append to §4 and §6, update §5 status as features land, never
-rewrite history sections.
+rewrite history sections. **The 18-agent build is COMPLETE as of Wave 6
+(A18) — see §8 for the project-complete note.**
 
 - Repo: https://github.com/ryanthabot/asus-gpu-mode-switch
 - Current stable baseline: **v1.0.22** (commit `4260aef` on `main`)
@@ -22,14 +23,21 @@ Armoury Crate. Both exes are built from **one shared C# codebase**
 Wave 2, see §3) with the C# compiler that ships with Windows.
 
 - **Go Time.exe** (`/define:MODE_STANDARD`): switches to Standard GPU mode —
-  dGPU powered on, hybrid (MSHybrid) display path. Since v1.0.22 it also shows
-  a **launch-time selection stage**: two checkbox groups ("System
-  optimizations": Game Mode, do-not-disturb, Game DVR recording off, network
-  throttling off, pause background services — all ticked by default; and
-  "Tray apps detected": Parsec, Google Drive, Jellyfin, Riot Client, Riot
-  Vanguard). Only ticked items are applied when the user presses **GO**;
-  unticked items are actively restored. `--auto` skips the selection stage and
-  applies everything.
+  dGPU powered on, hybrid (MSHybrid) display path. Shows the **launch-time
+  selection stage**: "System optimizations" (Game Mode, do-not-disturb, Game
+  DVR recording off, network throttling off, pause background services — all
+  ticked by default), "Tray apps detected" (Parsec, Google Drive, Jellyfin,
+  Riot Client, Riot Vanguard), a **Performance** group (background process
+  freezer with editable freeze list, Ultimate Performance plan,
+  session-scoped Windows Update pause — ticked by default) and a **Storage
+  cleanup** group (WU cache purge, DISM component store, deep clean, GPU
+  shader caches, per-app caches — unticked by default, measured in the
+  background, disabled with reasons when the D7 gates block). Plus a named
+  **profile bar**, a collapsible **live system monitor**, a **session tray**
+  with a draggable **overlay** after a successful GO, and **Log History** /
+  **Session History** browsers in the result stage. `--auto` applies ONLY
+  the system optimizations + tray-app closing + GPU switch — the performance
+  and cleanup groups never run unattended.
 - **Eco Mode.exe** (`/define:MODE_ECO`): switches to Eco GPU mode — the dGPU is
   completely powered off (battery/silence). One-click; `--confirm` gives it a
   review stage before applying.
@@ -60,8 +68,10 @@ CLI flags understood by both exes: `--confirm` (opt-in review stage),
 (read-only probe shown in a MessageBox).
 
 v1.1.0 adds: a logging rewrite (per-run timestamped logs, browser, retention),
-Windows Update storage cleanup integrated into the GO flow, plus 10 new
-features (see §5). The suite stays **two exes**.
+Windows Update storage cleanup integrated into the GO flow, performance
+features (freezer / power plan / WU pause), session tray + overlay, named
+profiles, session history and the live monitor (see §5). The suite stays
+**two exes**.
 
 ---
 
@@ -107,19 +117,19 @@ features (see §5). The suite stays **two exes**.
 
 ---
 
-## §3 Architecture map (as of Wave 5, A17 — v1.1.0 in progress)
+## §3 Architecture map (FINAL — v1.1.0 complete, all 21 source files)
 
 ### Current files
 
 | File | Responsibility |
 |---|---|
-| `src\App.cs` | `Program` entry point + the original v1.0.x header/history; picks app identity by define, parses `--confirm` / `--auto` / `--status`. |
+| `src\App.cs` | `Program` entry point + the original v1.0.x header/history; picks app identity by define, parses `--confirm` / `--auto` / `--status`; v1.1 hooks `Application.ThreadException` + `AppDomain.UnhandledException` (Log.Error + eco-safe restore). |
 | `src\Logger.cs` | `Log` (static) — logging core: per-run timestamped log files, dual sink (buffer + file), session header/footer, retention pruning (30 days / 200 MB). Full API in the **Log API** table below. |
 | `src\AsusControl.cs` | `AsusTransport`, `AtkAcpiTransport`, `WmiTransport`, `SwitchOutcome`, `AsusControl`, `GpuServices`. |
 | `src\GamePrep.cs` | `GamePrep` (Go Time system optimizations / Eco restoration). |
 | `src\EnergySaver.cs` | `EnergySaver` (Energy Saver + Power Mode overlay, power API + registry + Settings automation). |
 | `src\Theme.cs` | UI primitives: `WindowIcons`, `UiShapes`, `ShimmerBar`. Colors stay inline at the call sites (as in v1.0.22). |
-| `src\Forms.cs` | `MainForm`, `LogForm`, `UiPhase` enum, `TrayAppInfo` + `TrayApps` (`#if MODE_STANDARD`). |
+| `src\Forms.cs` | `MainForm`, `LogForm`, `UiPhase` enum, `TrayAppInfo` + `TrayApps` + `FreezeListEditorForm` + `SessionSafety` (`#if MODE_STANDARD` for all but `LogForm`/`SessionSafety`). Wave 6 wired every module in here (see the MainForm row). |
 | `src\LogBrowser.cs` | `LogBrowserForm` — log history debugging window: browse/list/view/search past logs from both apps. |
 | `src\StorageAnalyzer.cs` | `CleanCategory` + `StorageAnalyzer` (A6): read-only storage cleanup analyzer — measures the WU / deep-clean / GPU shader-cache targets and checks the D7 safety gates. Strictly no deletion here; logs on the `CLEAN` channel. |
 | `src\ProcessFreezer.cs` | `ProcessFreezer` + `FreezeResult` — background process freezer: ntdll suspend/resume of the user's `freezelist.txt` apps during a gaming session (see class map below). |
@@ -145,7 +155,7 @@ features (see §5). The suite stays **two exes**.
 
 | File | Class | Responsibility | Key API |
 |---|---|---|---|
-| `App.cs` | `Program` (static) | Entry point; picks app identity by define; parses `--confirm` / `--auto` / `--status`; `--status` shows a MessageBox then exits. | `const string Version = "1.0.22"`, `Main(string[])` |
+| `App.cs` | `Program` (static) | Entry point; picks app identity by define; parses `--confirm` / `--auto` / `--status`; `--status` shows a MessageBox then exits; v1.1 crash hooks log + eco-safe restore. | `const string Version = "1.1.0"`, `Main(string[])` |
 | `Logger.cs` | `Log` (static) | Logging core (Wave 3): per-run log files `%LOCALAPPDATA%\GpuModeSwitch\logs\<GoTime\|EcoMode>\<App>_yyyy-MM-dd_HHmmss.log`, thread-safe buffer + file dual sink, session header/footer, retention (30 days / 200 MB), log listing. | see the **Log API** table below |
 | `AsusControl.cs` | `AsusTransport` (abstract) | Transport abstraction: read/write ASUS ACPI values. | `Name`, `Open()`, `Close()`, `ReadRaw(uint)`, `Write(uint, uint)` |
 | `AsusControl.cs` | `AtkAcpiTransport : AsusTransport` | Primary: direct `DeviceIoControl` on `\\.\ATKACPI`, IOCTL `0x0022240C`, DSTS/DEVS. | (inherits; logs every call with raw hex) |
@@ -161,8 +171,10 @@ features (see §5). The suite stays **two exes**.
 | `Forms.cs` | `LogForm : Form` | Log viewer (Wave 4): read-only monospace box over the **live buffer or any older per-run log**; history dropdown (`Log.ListLogs`, newest first, "Current session (live)" on top + Refresh), severity filter All/Info/Warn/Error (parses the `[LEVEL]` prefix, exception continuations ride along, live view re-filters on change), case-insensitive **Find next** (wraps, Enter repeats), **Open folder** (Explorer `/select` on the viewed log), **Copy log** (displayed text) + **Copy all** (whole source), path strip, pre-selected text (Ctrl+C immediately), 5-row deterministic TableLayoutPanel shell (DPI-proof). Reads `Log.Snapshot()` / `Log.CurrentLogPath` / `Log.ListLogs(appName)`; logs UI actions as `log viewer: ...` via `Log.Info`. | ctor `LogForm(string appName)` |
 | `Forms.cs` | `TrayAppInfo` / `TrayApps` (static, `#if MODE_STANDARD`) | Known tray apps (Parsec, Google Drive, Jellyfin, Riot Client, Riot Vanguard); detection against running processes; close = stop matching watchdog services (registry scan) then graceful close → kill, 3 rounds. | `Known`, `Detect()`, `Close(TrayAppInfo)` |
 | `Forms.cs` | `UiPhase` (enum) | Main-window phase machine states. | `Probe`, `Confirm`, `Applying`, `Result` |
-| `Forms.cs` | `MainForm : Form` | Themed borderless resizable window (rounded corners, fade-in, edge drag/resize via WndProc), phase machine (`UiPhase`: Probe → Confirm/Select → Applying → Result), selection-stage checkboxes + tray picker (Standard), restart prompt, View log button. | ctor `MainForm(bool confirmMode, bool autoMode)` |
-| `LogBrowser.cs` | `LogBrowserForm : Form` | Log-history debugging window (Wave 4): LEFT list of every log from BOTH apps (`Log.LogsRoot` + `GoTime`/`EcoMode`, merged newest first; columns App, File, Size (KB), Last write), RIGHT read-only monospace viewer in LogForm's style (files > ~2 MB load the tail with a notice line; text pre-selected so Ctrl+C works immediately), toolbar (Find box + Search find-next / Search all logs / Open folder via `explorer.exe /select` / Copy view / Refresh) and a status strip. Search is case-insensitive; search-all lists matching lines with file + line number in a results pane (cap 500 + truncation notice; clicking a hit opens that file at that line). Files opened with `FileShare.ReadWrite` so the live current log is viewable; search-all runs on ThreadPool with the RunBg/SafeInvoke pattern. Logs via `Log.Info`: "log browser: opened ..." / "log browser: search '...' ...". | `ShowBrowser(Form owner)` (non-modal, owned by caller); compiled into both targets, reachable from Go Time only (menu entry = Wave 6/A18) |
+| `Forms.cs` | `MainForm : Form` | Themed borderless resizable window (rounded corners, fade-in, edge drag/resize via WndProc), phase machine (`UiPhase`: Probe → Confirm/Select → Applying → Result). **v1.1 (Wave 6, A18):** the selection stage lives in one scrollable panel (form grows to 600x880 px, clamped to the working area) hosting the ProfileBar (keys `opt.*`/`tray.*`/`perf.*`/`clean.*`/`clean.appcache.<Name>` stored in `CheckBox.Tag`), the v1.0.22 optimization + tray groups, the Performance group (freeze + "Edit list..." → `FreezeListEditorForm`, plan, WU pause), the Storage cleanup group (4 fixed boxes + one per installed `AppCacheCleaner` target; background RunBg measurement appends sizes, running apps start unchecked, gate reasons disable the group with a warning label, report-only Windows.old note), and a collapsible `MonitorPanel`. GO runs (non-auto only, after the unchanged GPU switch + `GamePrep`): `ProcessFreezer.FreezeSelected` → `PowerPlans.SetUltimate` → `WuPause.PauseUpdates` → cleanup (`StorageCleaner.Clean` tier-1 by ticked kinds → `ComponentStore.RunCleanup` → `DeepClean.Clean` fresh-measured → `GpuTools.Clean(…, false, …)` → `AppCacheCleaner.Clean`), every step try/caught + logged, unticked reversible features actively restored, then a `SessionRecord` is appended. On success `AfterGoSuccess` starts the monitor engine (2000 ms) and creates the `SessionTray` (open / eco-safe restore / overlay toggle / status / exit); overlay = `MonitorOverlayForm` created on first toggle. Result stage shows a capped cleanup-summary block plus Log History / Session History / View log buttons and the v1.0.22 tray-only picker. `SessionSafety.RestoreAll` runs on Eco apply, tray restore, tray exit, `RunBg` catch, `FormClosed`. | ctor `MainForm(bool confirmMode, bool autoMode)` |
+| `Forms.cs` | `SessionSafety` (static) | The single eco-safe restore (v1.1): `ProcessFreezer.ResumeAllSafe()` → `PowerPlans.RestorePrevious()` → `WuPause.ResumeUpdates()` → hide/dispose `ActiveTray` (static ref to Go Time's session tray). Every step try/caught, no-ops when nothing is active; callable from `App.cs` crash hooks. | `ActiveTray`, `RestoreAll()` |
+| `Forms.cs` | `FreezeListEditorForm : Form` | Dark modal editor over `ProcessFreezer.GetUserList()/SaveUserList()` (one name per line); seeds defaults first; on save strips `.exe`, skips blanks, refuses guarded names via `IsGuarded` with a message. | ctor `FreezeListEditorForm()` |
+| `LogBrowser.cs` | `LogBrowserForm : Form` | Log-history debugging window (Wave 4): LEFT list of every log from BOTH apps (`Log.LogsRoot` + `GoTime`/`EcoMode`, merged newest first; columns App, File, Size (KB), Last write), RIGHT read-only monospace viewer in LogForm's style (files > ~2 MB load the tail with a notice line; text pre-selected so Ctrl+C works immediately), toolbar (Find box + Search find-next / Search all logs / Open folder via `explorer.exe /select` / Copy view / Refresh) and a status strip. Search is case-insensitive; search-all lists matching lines with file + line number in a results pane (cap 500 + truncation notice; clicking a hit opens that file at that line). Files opened with `FileShare.ReadWrite` so the live current log is viewable; search-all runs on ThreadPool with the RunBg/SafeInvoke pattern. Logs via `Log.Info`: "log browser: opened ..." / "log browser: search '...' ...". | `ShowBrowser(Form owner)` (non-modal, owned by caller); compiled into both targets, wired into Go Time's result stage (`_histBtn`, Wave 6) |
 | `StorageAnalyzer.cs` | `CleanCategory` | Result DTO of one cleanable target. | `Name`, `Kind` (`wu`/`dism`/`deepclean`/`appcache`/`gpu`), `Bytes`, `Files`, `Notes`, `RiskLabel`, `Selected`; `SizeText` (B/KB/MB/GB) |
 | `StorageAnalyzer.cs` | `StorageAnalyzer` (static) | Read-only measurement of all cleanup targets (WU download cache, Delivery Optimization, Windows temp >7 days, WER reports, old CBS/WindowsUpdate log archives, ReportingEvents.log, user temp, crash dumps, Explorer thumbnail caches, per-path GPU shader caches) + D7 gates (elevation, pending-reboot signals, busy WU services) that fail closed. Long paths via kernel32 `FindFirstFileW`/`GetFileAttributesExW` with the `\\?\` prefix (DirectoryInfo rejects it on .NET 4.x); reparse points skipped; per-item failures swallowed into `Notes`. | `MeasureAll()`, `CheckGates()`, `GatesSummaryText(List<string>)` |
 | `ProcessFreezer.cs` | `FreezeResult` (public struct) | Result DTO of one freeze/resume round, consumed by the Wave 6 UI. | `Suspended`, `Failed`, `SkippedGuarded` (ints), `Summary` (string tally) |
@@ -174,7 +186,7 @@ features (see §5). The suite stays **two exes**.
 | `Profiles.cs` | `ProfileBar : UserControl` | Dark horizontal bar (Label "Profile:" + DropDownList combo + Apply/Save.../Delete/Refresh, Forms.cs palette inline, default 560×44) wiring Wave 6 checkbox groups to saved profiles; Apply reads the selected profile fresh from the store; Save grabs the host state via `CollectSelections`, asks the name in the dark `ProfileNameDialog` modal, then saves/refreshes/fires `Saved`; Delete confirms Yes/No; every action logs `[PROFILE]`. | events `ApplyRequested`, `Saved` (`Action<string, Dictionary<string,bool>>`), `CollectSelections` (`Func<Dictionary<string,bool>>`); `Reload()` |
 | `SessionHistory.cs` | `SessionRecord` | One recorded run — plain data holder for the JSONL store; parameterless ctor keeps the JavaScriptSerializer round-trip working. | public fields: `UtcTimestamp`, `App`, `Mode`, `ActionsApplied` (List<string>), `SpaceFreedByCategory` (Dictionary<string,long>), `DurationSec`, `ErrorCount`, `Result` |
 | `SessionHistory.cs` | `SessionHistory` (static) | Append-only JSONL store at `%LOCALAPPDATA%\GpuModeSwitch\sessions.jsonl` (one serialized object per line); all ops best-effort, never throws; corrupt lines skipped with WARNs capped at 3; timestamps normalized to UTC. | `FilePath`, `Append(SessionRecord)`, `ReadAll()` (newest first), `ExportText(List<SessionRecord>)`, `FormatBytes(long)` |
-| `SessionHistory.cs` | `SessionHistoryForm : Form` | "Session History" viewer: dark list (When local / App / Mode / Result / Freed / Errors, newest first) + Refresh, read-only detail pane showing the selected record's ExportText (pre-selected so Ctrl+C works immediately), "Export .txt" + "Copy" buttons; logs `Log.Info` "session history: ...". | ctor `SessionHistoryForm()`, `static void ShowHistory(Form owner)` (non-modal, owned) |
+| `SessionHistory.cs` | `SessionHistoryForm : Form` | "Session History" viewer: dark list (When local / App / Mode / Result / Freed / Errors, newest first) + Refresh, read-only detail pane showing the selected record's ExportText (pre-selected so Ctrl+C works immediately), "Export .txt" + "Copy" buttons; logs `Log.Info` "session history: ...". | ctor `SessionHistoryForm()`, `static void ShowHistory(Form owner)` (non-modal, owned); wired into Go Time's result stage (`_sessBtn`, Wave 6) |
 | `SystemMonitor.cs` | `MonitorSample` | One monitor reading; public-field DTO for the panel (Wave 6) and overlay (Wave 5). `RamText` formats "4.2 / 16.0 GB". | fields `CpuPercent`, `RamUsedBytes`, `RamTotalBytes`, `DiskActivePercent`, `GpuPercent`, `GpuTempC`, `CpuTempC`, `HasGpu`, `HasGpuTemp`, `HasCpuTemp`, `Timestamp`; prop `RamText` |
 | `SystemMonitor.cs` | `MonitorEngine` (static) | Periodic sampler on a System.Windows.Forms.Timer (samples arrive on the UI thread; decision documented in the file header). CPU + disk PerformanceCounters (created once, primed, recreated after Stop), RAM via kernel32 `GlobalMemoryStatusEx` P/Invoke, GPU via nvidia-smi (System32 → NVSMI → PATH, resolved once per session, hidden window, 2.5 s timeout; absent/failed → N/A, never faked from CPU), CPU temp via WMI `root\WMI MSAcpi_ThermalZoneTemperature`. Per-metric try/catch keeps last-known; unavailability logged once per session. Logs through MONITOR. | `Start(int)`, `Start()`, `Stop()`, `RunOnce()`, `Running`, `LastSample`, `event Action<MonitorSample> SampleReady` |
 | `SystemMonitor.cs` | `MonitorPanel : UserControl` | Dark-theme embeddable panel: deterministic TableLayoutPanel grid (Label + ProgressBar + value per metric: CPU %, RAM, Disk %, GPU %, GPU temp, CPU temp; "N/A" when unavailable) + "updated HH:mm:ss" footer; min 360x180; bars dark via uxtheme SetWindowTheme classic mode. | ctor `MonitorPanel()`, `AttachToEngine()`, `DetachFromEngine()` |
@@ -235,10 +247,11 @@ Two placement notes vs. the original sketch: `WindowIcons` lives in
 
 ### Future modules
 
-**None — every planned module has landed** (Wave 4: LogBrowser, StorageAnalyzer,
-ProcessFreezer, PowerPlans, Profiles, SessionHistory, SystemMonitor; Wave 5:
-StorageCleaner, ComponentStore, AppCacheCleaner, DeepClean, GpuTools, Overlay,
-TrayIcon). What remains is Wave 6 integration only (A18, §8).
+**None — the build is complete.** Every planned module landed (Wave 4:
+LogBrowser, StorageAnalyzer, ProcessFreezer, PowerPlans, Profiles,
+SessionHistory, SystemMonitor; Wave 5: StorageCleaner, ComponentStore,
+AppCacheCleaner, DeepClean, GpuTools, Overlay, TrayIcon) and Wave 6 (A18)
+wired them all into the apps. See §8 for the project-complete note.
 
 ---
 
@@ -367,7 +380,7 @@ the Wave 6 UI visibility without enabling the dangerous action).
 | Session history (`SessionHistory.cs`) | **A15** | **done** (Wave 4) |
 | Live system monitor (`SystemMonitor.cs`, panel tab) | **A16** | **done** (Wave 4) |
 | Session-only tray menu + overlay (`TrayIcon.cs`, `Overlay.cs`) | **A17** | **done** (Wave 5; out-of-tree verified both defines; tray/overlay wiring lands with A18) |
-| GO-flow integration of cleanup into Go Time selection stage | **A18** | not started |
+| GO-flow integration of cleanup into Go Time selection stage | **A18** | **done** (Wave 6, commit `7841c88`; docs commit follows) |
 
 Rules: update your row's Status as you go (`in progress` → `done` with the
 commit hash); mark blocked with the reason. Add new rows at the bottom.
@@ -1015,6 +1028,122 @@ commit hash); mark blocked with the reason. Add new rows at the bottom.
     §3/§5/§6 updated from the agents' paste-ready blocks + D9 appended to
     §4; §8 rewritten for Wave 6.
 
+- **2026-09-06 — Wave 6 / A18 (GO-flow integration, docs, final
+  verification) completed. THE 18-AGENT BUILD IS DONE.**
+  - Read this handbook completely, then `src\Forms.cs`, `src\App.cs`,
+    `src\GamePrep.cs` and skimmed every module's public surface before
+    wiring. Only `src\Forms.cs` (+1,314/−63) and `src\App.cs` (+45/−15)
+    changed; no module file was touched.
+  - **Selection stage v1.1 (Go Time, `#if MODE_STANDARD`):** the stage now
+    lives in one scrollable `Panel _selectPanel` (form grows 560x640 → 600x880 on
+    entering the stage, clamped to the working area; AutoScroll covers short
+    screens). Contents top-to-bottom: `ProfileBar` → precheck label (was
+    `_detail` in v1.0.22) → System optimizations (unchanged) → Tray apps
+    detected (unchanged) → **Performance** group ("Freeze background apps"
+    with an **"Edit list..."** button opening the new dark modal
+    `FreezeListEditorForm` — seeds defaults, loads/saves
+    `ProcessFreezer.GetUserList()/SaveUserList()`, strips `.exe`, refuses
+    blank/guarded names via `IsGuarded` with feedback; "Ultimate Performance
+    plan"; "Pause Windows Update") → **Storage cleanup** group ("Windows
+    Update cache purge", "Component store cleanup (DISM)" — no size, DISM
+    analyzes at clean time, "Deep clean", "GPU shader caches" + one checkbox
+    per installed `AppCacheCleaner.Targets()` entry with resolved cache
+    dirs) → gate warning / Windows.old note labels → collapsible
+    **MonitorPanel** ("Show system monitor" toggle, attached at select
+    show). Background RunBg measurement (`StorageAnalyzer.MeasureAll()` +
+    `DeepClean.Measure()` + `GpuTools.Measure()` + `AppCacheCleaner.
+    Measure()` + `CheckGates()`, strictly read-only) appends measured sizes
+    to captions via `StorageCleaner.FormatBytes`, marks running app-cache
+    targets "(app running)" and starts them UNCHECKED, appends the
+    report-only "previous Windows installations … (report only - never
+    deleted)" note (D3 Tier 3) and — when gates return reasons — DISABLES
+    the whole cleanup group with "Cleanup unavailable: <r1>; <r2>".
+  - **Profiles (A14):** every checkbox carries a stable key in `Tag`
+    (`opt.gamemode/dnd/dvr/throttle/services`, `tray.<Label>`,
+    `perf.freeze/plan/wupause`, `clean.wu/dism/deep/gpu`,
+    `clean.appcache.<Name>`); `CollectAllSelections` gathers them,
+    `ApplyProfileSelections` sets them by key, ignores unknown keys with a
+    log line and never touches gate-disabled boxes.
+  - **GO execution (unchanged first):** tray closing → `AsusControl.
+    SwitchTo` → `GamePrep.ApplyForGaming` exactly as v1.0.22 — the GPU
+    switch stays the headline; the new steps run only on success and only
+    when NOT `--auto` (sessionFeatures flag; enforced in code, commented,
+    documented in the README): freeze → plan → WU pause → cleanup chain
+    (`StorageCleaner.Clean` with the ticked tier-1 kinds from the
+    measurement snapshot → `ComponentStore.RunCleanup` if DISM ticked →
+    `DeepClean.Clean` on a fresh `Measure()` filtered to its two cleanable
+    categories → `GpuTools.Clean(fresh Measure(), includeDriverLeftovers:
+    false)` → `AppCacheCleaner.Clean(ticked names)`), a GO-time
+    `CheckGates()` re-check in front (the cleaners re-check again — belt
+    and braces). Every step individually try/caught + logged; unticked
+    reversible features actively restored (`ResumeAllSafe`/
+    `RestorePrevious`/`ResumeUpdates`).
+  - **Session record + result stage:** one `SessionRecord` per non-auto GO
+    run (App "Go Time", Mode "Standard", ActionsApplied incl. the GPU
+    headline + prep + tray closes + every applied step,
+    SpaceFreedByCategory from all CleanResults/AppCacheCleanResults,
+    DurationSec via Stopwatch, ErrorCount from the new-code error
+    counter, Result = headline + " (free: X)"). Result stage appends a
+    compact cleanup-summary block (per-line CleanResult/appcache summaries
+    + total, capped at 12 lines) and shows **Log History**
+    (`LogBrowserForm.ShowBrowser`) and **Session History**
+    (`SessionHistoryForm.ShowHistory`) buttons on a second bottom row,
+    alongside the existing View log (Copy log inside) + Close + Restart.
+    HAGS is NOT in the default flow (capability only, documented).
+  - **Session tray + overlay:** `AfterGoSuccess()` ensures the monitor
+    engine (single owner: MainForm; `MonitorEngine.Start(2000)` at select
+    show / tray creation, `Stop()` on session end/close) and creates
+    `SessionTray` — openWindow = Show+Activate; applyEco =
+    `BeginEcoRestore` (background `SessionSafety.RestoreAll()`, UI
+    update, tray/engine/overlay torn down; switching the GPU itself stays
+    Eco Mode.exe's job per D4); toggleOverlay = create-or-toggle
+    `MonitorOverlayForm` (Attach on create, Dispose on teardown);
+    statusText = dGPU line of `AsusControl.DescribeState()` + latest
+    `MonitorEngine.LastSample`; exitApp = eco-safe restore then close.
+    Tray disposed on window close.
+  - **Eco-safe restore:** new `SessionSafety` (Forms.cs, both targets):
+    `ResumeAllSafe` → `RestorePrevious` → `ResumeUpdates` → tray
+    hide/dispose, every step try/caught. Called on Eco Mode apply
+    (MODE_ECO block in BeginApply's RunBg), the tray restore path, tray
+    exit, `RunBg`'s BACKGROUND ERROR catch, `FormClosed`, and the new
+    `Application.ThreadException` + `AppDomain.UnhandledException` hooks
+    in `App.cs` (both exes). `Program.Version` → **1.1.0**.
+  - **Build verified (integrated, in-repo):** `cmd //c "src\build.cmd"` →
+    exit 0, csc silent (zero diagnostics) on BOTH defines, `Build OK:` +
+    `Eco Mode.exe` (**265,216 bytes**) and `Go Time.exe` (**292,864
+    bytes**). Banned-syntax scan over `src\`: `$"`, `?.`, `nameof`, `=>` —
+    **0 hits each**. Define split re-proven by UTF-16 string scan of both
+    exes (all new stage strings only in Go Time.exe).
+  - **Analyze-only dry run** (out-of-tree temp harness — only
+    Measure/CheckGates/Targets calls, **no `Clean()` anywhere**, no
+    BeginSession, zero disk writes): 13 analyzer categories (DXCache
+    23.15 GB / 279 files cross-validated against GpuTools, user temp
+    522.3 MB, thumbnails 214.8 MB, WU download cache 16.2 MB, old update
+    log archives 19.8 MB), DeepClean: setup logs 1.1 MB, **Windows.old
+    549.88 GB (report only)**, 6 present app-cache targets (Brave 1.27 GB,
+    Steam 658.9 MB, Discord 346.4 MB, Edge 352.5 MB, Battle.net 67.3 MB,
+    Chrome 10.9 MB; Brave/Steam/Discord flagged "app running"), 10 targets
+    of which 4 resolve no cache dirs (no checkbox), and 3 correct
+    unelevated gate reasons (not elevated, PendingFileRenameOperations,
+    UsoSvc Running). Full numbers in BUILD_NOTES.md; temp dir deleted.
+  - **Manual UAC-gated checklist** (10 items: --status, selection-stage
+    walkthrough, profiles, freeze-list editor validation, real GO with
+    cleanup, tray menu + overlay drag, Eco round-trip, abnormal-exit
+    restore, retention prune, log browser) written to BUILD_NOTES.md —
+    cannot be automated (requireAdministrator pops UAC).
+  - **Docs:** README.md gained the v1.1.0 version-history entry at the top
+    (logging rewrite, storage cleanup + safety model, performance
+    features, tray/overlay, profiles, session history, monitor, --auto
+    semantics), a **Logging** section (paths/retention/finding logs) and
+    the `docs\HANDBOOK.md` pointer; BUILD_NOTES.md gained the Wave 6
+    section; this handbook: §1 (v1.1.0 summary), §3 (final map + MainForm/
+    SessionSafety/FreezeListEditorForm rows), §5 (A18 done), §6 (this
+    entry), §8 (project complete).
+  - Committed as `feat(go-flow): wire Wave 4-6 modules into the apps
+    (selection stage v1.1, GO session chain, session tray, eco-safe
+    restore)` (`7841c88`) + a docs commit on `v1.1-logging-cleanup`. Not
+    pushed (never push).
+
 ---
 
 ## §7 Build & verify (exact commands)
@@ -1047,86 +1176,52 @@ reference — fix the code, never change the compiler or add references outside
 
 ---
 
-## §8 Next steps
+## §8 Next steps — PROJECT COMPLETE
 
-1. **Waves 1–4 — DONE** (see §5/§6): bootstrap, decomposition, logging core
+1. **Waves 1–5 — DONE** (see §5/§6): bootstrap, decomposition, logging core
    (`Log` contract in §3 — all modules log through `Log.Info` / `Log.Warn` /
-   `Log.Error` / `Log.Chan(channel, msg)`), and eight feature modules
-   (log window, log browser, storage analyzer, process freezer, power plans +
-   WU pauser, profiles, session history, monitor engine + panel). The
-   integrated in-repo build of all 14 source files passed with zero
-   diagnostics on both `/define` targets.
+   `Log.Error` / `Log.Chan(channel, msg)`), eight feature modules, six
+   cleaner/tool modules and the overlay + tray.
 
-2. **Wave 5 — cleaners/tools: DONE** (see §5/§6). All six modules landed
-   (StorageCleaner A7, ComponentStore A8, AppCacheCleaner A9, DeepClean A10,
-   GpuTools A11, Overlay + TrayIcon A17). Cleanup category ownership is
-   defined by D9; the integrated in-repo build of all 20 source files
-   passed with zero diagnostics on both `/define` targets.
+2. **Wave 6 — A18 (GO-flow integration, docs, final verification): DONE**
+   (see the final §6 entry). Everything in the original Wave 6 spec landed:
+   selection-stage Performance + Storage-cleanup groups (background
+   measurement, D7 gate disabling, measured captions), ProfileBar wired with
+   stable keys, MonitorPanel section, GO session chain (freeze → plan → WU
+   pause → tiered cleanup) with a SessionRecord per run, result-stage
+   cleanup summary + Log History / Session History buttons, session tray +
+   overlay, the `SessionSafety` eco-safe restore on every exit path,
+   `Program.Version` 1.1.0, README/`BUILD_NOTES.md`/handbook updates, the
+   integrated build (both targets zero diagnostics), the C# 5 banned-syntax
+   scan (0 hits), the read-only analyze dry run and the UAC-gated manual
+   checklist in `BUILD_NOTES.md`.
 
-3. **Wave 6 — A18 (GO-flow integration, docs, final verification) — the
-   last agent.** Wire the finished module APIs into `Forms.cs` + `App.cs`
-   (read each module's §3 rows first; the modules are static classes with
-   no UI of their own except `ProfileBar`, `MonitorPanel`,
-   `LogBrowserForm.ShowBrowser`, `SessionHistoryForm.ShowHistory`):
-
-   - **Selection stage additions (Go Time, `#if MODE_STANDARD`):**
-     - **Performance** checkbox group: "Freeze background apps" (with a
-       picker/editor over `ProcessFreezer.GetUserList()`/`SaveUserList()`,
-       seeded via `SeedDefaultListIfMissing()`), "Ultimate Performance
-       plan" (`PowerPlans.SetUltimate()`), "Pause Windows Update"
-       (`WuPause.PauseUpdates()`).
-     - **Storage cleanup** checkbox group: "Windows Update cache purge"
-       (A7), "Component store cleanup (DISM)" (A8), "Deep clean" (A10),
-       "GPU shader caches" (A11), per-app cache checkboxes (A9 — one per
-       `AppCacheCleaner.Targets()` entry, with `RunningApps()` warnings).
-       On stage open run `StorageAnalyzer.MeasureAll()` + `DeepClean.
-       Measure()` + `GpuTools.Measure()` + `AppCacheCleaner.Measure()` in
-       the background (RunBg) and show sizes next to each checkbox; run
-       `StorageAnalyzer.CheckGates()` — any block reason disables the
-       cleanup group with the reason shown.
-     - `MonitorPanel` (A16) embedded section; `ProfileBar` (A14) wired to
-       the checkbox groups (`CollectSelections` gathers every checkbox by
-       key, `ApplyRequested` restores them).
-   - **GO execution sequence:** GPU switch (existing) → freezer
-     (`ProcessFreezer.FreezeSelected()`) → power plan → WU pause → cleanup
-     in this order: `StorageCleaner.Clean(selected Tier-1 categories)` →
-     `ComponentStore.RunCleanup` (only if the DISM checkbox is ticked) →
-     `DeepClean.Clean(selected)` → `GpuTools.Clean(selected,
-     includeDriverLeftovers=false)` → `AppCacheCleaner.Clean(selected app
-     names)`. Every step logged; on completion
-     `SessionHistory.Append(new SessionRecord {...})` with the actions
-     applied and per-category `SpaceFreedByCategory` from the CleanResults.
-   - **Result stage:** show the space-freed summary (`CleanResult.Summary`
-     lines + total via `StorageCleaner.FormatBytes`), HAGS reboot note if
-     used, and buttons: **Log History** (`LogBrowserForm.ShowBrowser(this)`),
-     **Session History** (`SessionHistoryForm.ShowHistory(this)`), existing
-     View log + Copy log.
-   - **Session tray (D4):** after GO applies successfully instantiate
-     `SessionTray(openWindow, applyEco, toggleOverlay, statusText,
-     exitApp)` and `Show("Go Time session active")`; `applyEco` runs the
-     Eco restoration path then hides the tray; overlay toggles a
-     `MonitorOverlayForm` (Attach/Detach with the engine).
-   - **Eco Mode path:** `ProcessFreezer.ResumeAllSafe()` +
-     `PowerPlans.RestorePrevious()` + `WuPause.ResumeUpdates()` + tray
-     hide/Dispose must ALL run on the Eco restore path (and on abnormal
-     exit) — never leave a frozen process, a paused WU, or a foreign power
-     plan behind.
-   - **Version + README:** bump `Program.Version` to **1.1.0** in App.cs;
-     README: version-history entry for v1.1.0, feature docs, the logging
-     locations/retention section, the cleanup safety model (D3/D5/D7/D9 in
-     brief), and a pointer to `docs\HANDBOOK.md`. Update §5 (A18 done) and
-     §6 (final entry) here.
-   - **Final verification:** integrated build both targets zero
-     diagnostics; analyze-only dry run (measure + gates, NO deletion);
-     retention prune check; log browser + filter + search; Copy log in
-     both apps; tray/overlay manual checklist documented in
-     BUILD_NOTES.md (UAC-gated manual steps).
+3. **Project complete — how to continue.** The 18-agent v1.1.0 build is
+   finished on branch `v1.1-logging-cleanup` (never pushed). What a human
+   would do next:
+   - **Manual verification** — work through the 10-item UAC-gated checklist
+     at the end of `BUILD_NOTES.md` (`--status`, selection stage, profiles,
+     freeze-list editor, a real GO with cleanup ticked, tray menu + overlay
+     drag, Eco round-trip, abnormal-exit restore, retention prune, log
+     browser). Fix anything that surfaces; keep this handbook's §6
+     append-only discipline.
+   - **Release** — bump/tag `v1.1.0` on `main` after merging
+     `v1.1-logging-cleanup`, build with `src\build.cmd`, attach both exes
+     (plus the two 256px PNGs) to a GitHub release, and update the README's
+     Download pointer if needed. Remember `dist\` is gitignored — never
+     commit artifacts.
+   - **Future ideas** (deliberately out of scope, none implemented):
+     a HAGS toggle wired into the GO flow (`GpuTools.SetHags` exists but is
+     confirm-gated and NOT in the default flow), per-category cleanup
+     checkboxes instead of group boxes, a monitor tab in Eco Mode, profile
+     import/export. Any new work should follow §2's constraints (C# 5,
+     csc-only build, two `/define` targets) and append to §4/§6 here.
 
 Parallel-wave rule (as used in Waves 4–5): agents in the same wave own
 disjoint files, verify out-of-tree in a temp-dir harness (never run the
 in-repo `src\build.cmd` while other agents are mid-write), report
 HANDBOOK-UPDATE blocks instead of editing the handbook, and never commit —
 the orchestrator runs the integrated build, applies handbook updates, and
-commits once per wave with a detailed message. A18 (Wave 6) is a single
-agent and edits shared files (`Forms.cs`, `App.cs`) that no other agent
-touches, so it may build in-repo and update the handbook directly.
+commits once per wave. A18 (Wave 6) was a single agent, edited the shared
+files (`Forms.cs`, `App.cs`) that no other agent touched, so it built
+in-repo and updated the handbook directly.

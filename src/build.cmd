@@ -5,6 +5,9 @@ rem No Visual Studio, .NET SDK, or internet access required.
 rem
 rem   dist\Go Time.exe   -> Standard GPU mode (MSHybrid, dGPU on)
 rem   dist\Eco Mode.exe  -> Eco GPU mode      (dGPU powered off)
+rem
+rem Since the v1.1 file split, every .cs file under src\ is compiled into
+rem both targets (previously the single src\GpuModeSwitch.cs).
 rem ---------------------------------------------------------------------------
 setlocal
 cd /d "%~dp0.."
@@ -31,17 +34,17 @@ for /f "delims=" %%i in ('dir /b /ad "%WINDIR%\Microsoft.NET\assembly\GAC_MSIL\U
 %CSC% /nologo /target:winexe /platform:anycpu /optimize+ /define:MODE_STANDARD ^
     /win32manifest:src\app.manifest /win32icon:src\gotime.ico ^
     /res:src\gotime-256.png,GpuModeSwitch.appicon.png ^
-    /r:System.dll /r:"%WPFDIR%\WindowsBase.dll" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Management.dll /r:System.ServiceProcess.dll ^
+    /r:System.dll /r:"%WPFDIR%\WindowsBase.dll" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Management.dll /r:System.ServiceProcess.dll /r:System.Web.Extensions.dll ^
     /r:"%UIAC_DIR%\UIAutomationClient.dll" /r:"%UIAT_DIR%\UIAutomationTypes.dll" ^
-    /out:"dist\Go Time.exe" src\GpuModeSwitch.cs
+    /out:"dist\Go Time.exe" src\*.cs
 if errorlevel 1 exit /b 1
 
 %CSC% /nologo /target:winexe /platform:anycpu /optimize+ /define:MODE_ECO ^
     /win32manifest:src\app.manifest /win32icon:src\ecomode.ico ^
     /res:src\ecomode-256.png,GpuModeSwitch.appicon.png ^
-    /r:System.dll /r:"%WPFDIR%\WindowsBase.dll" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Management.dll /r:System.ServiceProcess.dll ^
+    /r:System.dll /r:"%WPFDIR%\WindowsBase.dll" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Management.dll /r:System.ServiceProcess.dll /r:System.Web.Extensions.dll ^
     /r:"%UIAC_DIR%\UIAutomationClient.dll" /r:"%UIAT_DIR%\UIAutomationTypes.dll" ^
-    /out:"dist\Eco Mode.exe" src\GpuModeSwitch.cs
+    /out:"dist\Eco Mode.exe" src\*.cs
 if errorlevel 1 exit /b 1
 
 echo.

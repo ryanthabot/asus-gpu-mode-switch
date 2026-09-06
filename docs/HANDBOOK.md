@@ -17,9 +17,9 @@ rewrite history sections.
 Two one-click Windows executables — **Go Time.exe** and **Eco Mode.exe** — that
 switch the GPU Mode on ASUS laptops (the same Standard/Eco switch in
 *Armoury Crate → Devices → System Settings → GPU Performance*) without opening
-Armoury Crate. Both exes are built from **one shared C# source file**
-(`src\GpuModeSwitch.cs`, namespace `GpuModeSwitch`) with the C# compiler that
-ships with Windows.
+Armoury Crate. Both exes are built from **one shared C# codebase**
+(`src\*.cs`, namespace `GpuModeSwitch` — split across seven module files in
+Wave 2, see §3) with the C# compiler that ships with Windows.
 
 - **Go Time.exe** (`/define:MODE_STANDARD`): switches to Standard GPU mode —
   dGPU powered on, hybrid (MSHybrid) display path. Since v1.0.22 it also shows
@@ -35,8 +35,8 @@ ships with Windows.
   review stage before applying.
 
 **How the build works:** `src\build.cmd` runs
-`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe` twice against
-`src\GpuModeSwitch.cs` — once with `/define:MODE_STANDARD` producing
+`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe` twice against all of
+`src\*.cs` — once with `/define:MODE_STANDARD` producing
 `dist\Go Time.exe`, once with `/define:MODE_ECO` producing
 `dist\Eco Mode.exe`. Each build embeds its own `.ico` as the Win32 icon and its
 256px PNG as resource `GpuModeSwitch.appicon.png`, and uses
@@ -107,62 +107,70 @@ features (see §5). The suite stays **two exes**.
 
 ---
 
-## §3 Architecture map (as of baseline v1.0.22)
+## §3 Architecture map (as of Wave 2, A2 — v1.1.0 in progress)
 
 ### Current files
 
 | File | Responsibility |
 |---|---|
-| `src\GpuModeSwitch.cs` | **The entire application** (2,678 lines, namespace `GpuModeSwitch`). Both apps. |
+| `src\App.cs` | `Program` entry point + the original v1.0.x header/history; picks app identity by define, parses `--confirm` / `--auto` / `--status`. |
+| `src\Logger.cs` | `Logger` (in-memory StringBuilder + mirror to `%LOCALAPPDATA%\GpuModeSwitch\<GoTime\|EcoMode>.log`, single file rewritten each run — **replaced in Wave 3**). |
+| `src\AsusControl.cs` | `AsusTransport`, `AtkAcpiTransport`, `WmiTransport`, `SwitchOutcome`, `AsusControl`, `GpuServices`. |
+| `src\GamePrep.cs` | `GamePrep` (Go Time system optimizations / Eco restoration). |
+| `src\EnergySaver.cs` | `EnergySaver` (Energy Saver + Power Mode overlay, power API + registry + Settings automation). |
+| `src\Theme.cs` | UI primitives: `WindowIcons`, `UiShapes`, `ShimmerBar`. Colors stay inline at the call sites (as in v1.0.22). |
+| `src\Forms.cs` | `MainForm`, `LogForm`, `UiPhase` enum, `TrayAppInfo` + `TrayApps` (`#if MODE_STANDARD`). |
 | `src\app.manifest` | Win32 manifest: `requireAdministrator`, Windows 10/11 supportedOS, `dpiAware` + PerMonitorV2. |
-| `src\build.cmd` | Two csc.exe invocations (MODE_STANDARD / MODE_ECO), GAC lookup for UIAutomation, WPF dir for WindowsBase, outputs to `dist\`. |
+| `src\build.cmd` | Two csc.exe invocations (MODE_STANDARD / MODE_ECO), each compiling **all `src\*.cs`**; GAC lookup for UIAutomation, WPF dir for WindowsBase; refs incl. `System.Management`, `System.ServiceProcess`, `System.Web.Extensions`; outputs to `dist\`. |
 | `src\gotime.ico` / `src\ecomode.ico` | Multi-size (16/32/48/256) taskbar/title icons, one per exe. |
 | `src\gotime-256.png` / `src\ecomode-256.png` | Embedded per-build as resource `GpuModeSwitch.appicon.png` (window logo). |
 | `src\nvidia-eye.svg`, `src\make-icons.ps1`, `src\pack-ico.ps1` | Icon artwork sources/generators — not part of the build. |
 | `README.md`, `LICENSE`, `.gitignore` | Docs (full v1.0.1→v1.0.22 changelog), MIT, ignores `dist/ .vs/ *.user icons-preview/`. |
 
-### Classes inside `GpuModeSwitch.cs` (key public surface)
+### Classes by file (namespace `GpuModeSwitch` — key public surface)
 
-| Class | Responsibility | Key API |
-|---|---|---|
-| `Program` (static) | Entry point; picks app identity by define; parses `--confirm` / `--auto` / `--status`; `--status` shows a MessageBox then exits. | `const string Version = "1.0.22"`, `Main(string[])` |
-| `Logger` (static) | In-memory StringBuilder + mirror to `%LOCALAPPDATA%\GpuModeSwitch\<GoTime\|EcoMode>.log` (single file, rewritten fresh each run — **replaced in Wave 3**). | `Init(appTitle, fileName)`, `Line(text)`, `Text`, `FilePath` |
-| `AsusTransport` (abstract) | Transport abstraction: read/write ASUS ACPI values. | `Name`, `Open()`, `Close()`, `ReadRaw(uint)`, `Write(uint, uint)` |
-| `AtkAcpiTransport : AsusTransport` | Primary: direct `DeviceIoControl` on `\\.\ATKACPI`, IOCTL `0x0022240C`, DSTS/DEVS. | (inherits; logs every call with raw hex) |
-| `WmiTransport : AsusTransport` | Fallback: WMI `root\WMI` classes `AsusAtkWmi_WMNB` / `ASUS_WMI` (DSTS/DEVS methods). | (inherits) |
-| `SwitchOutcome` | Result DTO of a switch. | `Ok`, `Changed`, `NeedsRestart`, `RunAgainAfterRestart`, `Headline`, `Detail` |
-| `AsusControl` (static) | Probes transports × device-ID pairs, normalizes DSTS responses (bare-zero = not implemented), performs the switch with read-back verification, orchestrates NV service release/restart and the MUX fallback. | `Available`, `MuxSupported`, `LastError`, `GetDgpuState()`, `GetMuxState()`, `Precheck(bool eco, out bool ok)`, `SwitchTo(bool eco)`, `Shutdown()`, `DescribeState()` |
-| `GpuServices` (static) | Finds/stops/starts `NVDisplay.Container*` services (release driver before Eco write, restart after Standard). Best-effort, never fatal. | `StopAll()`, `RestartAll()` |
-| `GamePrep` (static) | Game prep (Go Time) / restoration (Eco): Game Mode, do-not-disturb, Game DVR, NetworkThrottlingIndex, pause/restart 10 gamer services (SysMain, WSearch, Spooler, DiagTrack, WerSvc, MapsBroker, TrkWks, WMPNetworkSvc, SEMgrSvc, Fax). Unticked items are actively restored. | `ApplyForGaming(bool gameMode, bool dnd, bool dvr, bool throttle, bool pauseServices)`, `ApplyForEco()` |
-| `EnergySaver` (static) | Windows Energy Saver + Power Mode overlay: P/Invoke `PowerWriteAC/DCValueIndex` + `PowerSetActiveScheme` on SUB_ENERGYSAVER/ESBATTTHRESHOLD (100%/0%) and the Power Mode overlay GUIDs (0 = best efficiency, 3 = best performance); `EnergySaverState` registry intent; UI-Automation toggle of the Settings "Always use energy saver" switch (search-first flow). | `GetSavedState()`, `Sync(bool on)`, `ToggleAlwaysUseEnergySaver(bool on)`, `ApplyPowerModeOverlay(uint index)` |
-| `WindowIcons` (static) | Applies the exe's own icon to a form. | `Apply(Form)` |
-| `UiShapes` (static) | Rounded-rect `GraphicsPath` helper for the themed UI. | `RoundRect(...)` |
-| `ShimmerBar : Control` | Indeterminate animated shimmer progress bar. | `Active`, `Advance()`, `Accent` |
-| `LogForm : Form` | Log viewer: read-only monospace box (pre-selected text), path strip, **Copy log** + Close buttons on a TableLayoutPanel shell (DPI-proof). | ctor `LogForm(string appName)` |
-| `TrayAppInfo` / `TrayApps` (static, `#if MODE_STANDARD`) | Known tray apps (Parsec, Google Drive, Jellyfin, Riot Client, Riot Vanguard); detection against running processes; close = stop matching watchdog services (registry scan) then graceful close → kill, 3 rounds. | `Known`, `Detect()`, `Close(TrayAppInfo)` |
-| `MainForm : Form` | Themed borderless resizable window (rounded corners, fade-in, edge drag/resize via WndProc), phase machine (`UiPhase`: Probe → Confirm/Select → Applying → Result), selection-stage checkboxes + tray picker (Standard), restart prompt, View log button. | ctor `MainForm(bool confirmMode, bool autoMode)` |
+| File | Class | Responsibility | Key API |
+|---|---|---|---|
+| `App.cs` | `Program` (static) | Entry point; picks app identity by define; parses `--confirm` / `--auto` / `--status`; `--status` shows a MessageBox then exits. | `const string Version = "1.0.22"`, `Main(string[])` |
+| `Logger.cs` | `Logger` (static) | In-memory StringBuilder + mirror to `%LOCALAPPDATA%\GpuModeSwitch\<GoTime\|EcoMode>.log` (single file, rewritten fresh each run — **replaced in Wave 3**). | `Init(appTitle, fileName)`, `Line(text)`, `Text`, `FilePath` |
+| `AsusControl.cs` | `AsusTransport` (abstract) | Transport abstraction: read/write ASUS ACPI values. | `Name`, `Open()`, `Close()`, `ReadRaw(uint)`, `Write(uint, uint)` |
+| `AsusControl.cs` | `AtkAcpiTransport : AsusTransport` | Primary: direct `DeviceIoControl` on `\\.\ATKACPI`, IOCTL `0x0022240C`, DSTS/DEVS. | (inherits; logs every call with raw hex) |
+| `AsusControl.cs` | `WmiTransport : AsusTransport` | Fallback: WMI `root\WMI` classes `AsusAtkWmi_WMNB` / `ASUS_WMI` (DSTS/DEVS methods). | (inherits) |
+| `AsusControl.cs` | `SwitchOutcome` | Result DTO of a switch. | `Ok`, `Changed`, `NeedsRestart`, `RunAgainAfterRestart`, `Headline`, `Detail` |
+| `AsusControl.cs` | `AsusControl` (static) | Probes transports × device-ID pairs, normalizes DSTS responses (bare-zero = not implemented), performs the switch with read-back verification, orchestrates NV service release/restart and the MUX fallback. | `Available`, `MuxSupported`, `LastError`, `GetDgpuState()`, `GetMuxState()`, `Precheck(bool eco, out bool ok)`, `SwitchTo(bool eco)`, `Shutdown()`, `DescribeState()` |
+| `AsusControl.cs` | `GpuServices` (static) | Finds/stops/starts `NVDisplay.Container*` services (release driver before Eco write, restart after Standard). Best-effort, never fatal. | `StopAll()`, `RestartAll()` |
+| `GamePrep.cs` | `GamePrep` (static) | Game prep (Go Time) / restoration (Eco): Game Mode, do-not-disturb, Game DVR, NetworkThrottlingIndex, pause/restart 10 gamer services (SysMain, WSearch, Spooler, DiagTrack, WerSvc, MapsBroker, TrkWks, WMPNetworkSvc, SEMgrSvc, Fax). Unticked items are actively restored. | `ApplyForGaming(bool gameMode, bool dnd, bool dvr, bool throttle, bool pauseServices)`, `ApplyForEco()` |
+| `EnergySaver.cs` | `EnergySaver` (static) | Windows Energy Saver + Power Mode overlay: P/Invoke `PowerWriteAC/DCValueIndex` + `PowerSetActiveScheme` on SUB_ENERGYSAVER/ESBATTTHRESHOLD (100%/0%) and the Power Mode overlay GUIDs (0 = best efficiency, 3 = best performance); `EnergySaverState` registry intent; UI-Automation toggle of the Settings "Always use energy saver" switch (search-first flow). | `GetSavedState()`, `Sync(bool on)`, `ToggleAlwaysUseEnergySaver(bool on)`, `ApplyPowerModeOverlay(uint index)` |
+| `Theme.cs` | `WindowIcons` (static) | Applies the exe's own icon to a form. | `Apply(Form)` |
+| `Theme.cs` | `UiShapes` (static) | Rounded-rect `GraphicsPath` helper for the themed UI. | `RoundRect(...)` |
+| `Theme.cs` | `ShimmerBar : Control` | Indeterminate animated shimmer progress bar. | `Active`, `Advance()`, `Accent` |
+| `Forms.cs` | `LogForm : Form` | Log viewer: read-only monospace box (pre-selected text), path strip, **Copy log** + Close buttons on a TableLayoutPanel shell (DPI-proof). | ctor `LogForm(string appName)` |
+| `Forms.cs` | `TrayAppInfo` / `TrayApps` (static, `#if MODE_STANDARD`) | Known tray apps (Parsec, Google Drive, Jellyfin, Riot Client, Riot Vanguard); detection against running processes; close = stop matching watchdog services (registry scan) then graceful close → kill, 3 rounds. | `Known`, `Detect()`, `Close(TrayAppInfo)` |
+| `Forms.cs` | `UiPhase` (enum) | Main-window phase machine states. | `Probe`, `Confirm`, `Applying`, `Result` |
+| `Forms.cs` | `MainForm : Form` | Themed borderless resizable window (rounded corners, fade-in, edge drag/resize via WndProc), phase machine (`UiPhase`: Probe → Confirm/Select → Applying → Result), selection-stage checkboxes + tray picker (Standard), restart prompt, View log button. | ctor `MainForm(bool confirmMode, bool autoMode)` |
 
 Conventions worth preserving: every side effect is logged; every best-effort
 step is individually try/caught and never aborts the main flow; the UI updates
 via `RunBg` (ThreadPool) + `SafeInvoke` (marshals to UI thread).
 
-### Planned file split (Wave 2, A2 — zero behavior change)
+### File split (Wave 2, A2 — done, zero behavior change)
 
-`GpuModeSwitch.cs` will be decomposed into:
+The single 2,678-line `GpuModeSwitch.cs` was decomposed into the seven module
+files above. Every class moved verbatim; each `#if MODE_STANDARD` /
+`#if MODE_ECO` region stayed inside one file, so the two-target conditional
+compilation behaves exactly as before; `build.cmd` compiles all `src\*.cs`
+into both targets — the two `/define` targets and output names never change.
+Two placement notes vs. the original sketch: `WindowIcons` lives in
+`Theme.cs` (it is a UI primitive), and the `UiPhase` enum (used only by
+`MainForm`) lives in `Forms.cs`.
 
-- **Core split:** `App.cs` (Program/entry), `Theme.cs` (UiShapes, ShimmerBar,
-  shared themed drawing/colors), `AsusControl.cs` (transports + AsusControl +
-  SwitchOutcome), `EnergySaver.cs`, `GamePrep.cs`, `Logger.cs`, `Forms.cs`
-  (MainForm, LogForm, WindowIcons).
-- **Future modules (added by later waves, one feature each):**
-  `LogBrowser.cs` (A5), `StorageAnalyzer.cs` (A6), `StorageCleaner.cs` (A7),
-  `ComponentStore.cs` (A8), `AppCacheCleaner.cs` (A9), `DeepClean.cs` (A10),
-  `GpuTools.cs` (A11), `ProcessFreezer.cs` (A12), `PowerPlans.cs` (A13),
-  `Profiles.cs` (A14), `SessionHistory.cs` (A15), `SystemMonitor.cs` (A16),
-  `Overlay.cs` + `TrayIcon.cs` (A17).
+### Future modules (added by later waves, one feature each)
 
-`build.cmd` compiles all `src\*.cs` (or an explicit list) into both targets —
-the two `/define` targets and output names never change.
+`LogBrowser.cs` (A5), `StorageAnalyzer.cs` (A6), `StorageCleaner.cs` (A7),
+`ComponentStore.cs` (A8), `AppCacheCleaner.cs` (A9), `DeepClean.cs` (A10),
+`GpuTools.cs` (A11), `ProcessFreezer.cs` (A12), `PowerPlans.cs` (A13),
+`Profiles.cs` (A14), `SessionHistory.cs` (A15), `SystemMonitor.cs` (A16),
+`Overlay.cs` + `TrayIcon.cs` (A17).
 
 ---
 
@@ -233,7 +241,7 @@ targets the Tier 1/Tier 2 locations in D3 and the cache paths in D5.
 | Feature | Owning agent | Status |
 |---|---|---|
 | Bootstrap: clone, branch, baseline build, handbook | **A1** | **done** (Wave 1) |
-| Decomposition of `GpuModeSwitch.cs` into module files (zero behavior change) | **A2** (Wave 2) | not started |
+| Decomposition of `GpuModeSwitch.cs` into module files (zero behavior change) | **A2** (Wave 2) | **done** |
 | Logging rewrite (`Logger.cs` → `Log` contract, per-run files, retention) | **A3** (Wave 3) | not started |
 | Log window upgrade (per-run files, open-log-folder, richer view) | **A4** | not started |
 | Log browser (`LogBrowser.cs`, browse/list/past logs) | **A5** | not started |
@@ -277,6 +285,42 @@ commit hash); mark blocked with the reason. Add new rows at the bottom.
   - Committed both as `chore(bootstrap): clone baseline v1.0.22 and create
     living handbook` on `v1.1-logging-cleanup`. Not pushed (never push).
 
+- **2026-09-06 — Wave 2 / A2 (Decomposition) completed.**
+  - Read this handbook, `src\GpuModeSwitch.cs` (2,678 lines, 16 classes +
+    `UiPhase` enum) and `src\build.cmd`. Split the single source into seven
+    module files under `src\`, moving whole classes verbatim (no logic
+    edits, no renames; every `#if MODE_STANDARD` / `#if MODE_ECO` region
+    stayed inside one file):
+    - `App.cs` — `Program` (plus the original v1.0.x file header/history).
+    - `Logger.cs` — `Logger` (behavior unchanged this wave).
+    - `AsusControl.cs` — `AsusTransport`, `AtkAcpiTransport`,
+      `WmiTransport`, `SwitchOutcome`, `AsusControl`, `GpuServices`.
+    - `GamePrep.cs` — `GamePrep`.
+    - `EnergySaver.cs` — `EnergySaver`.
+    - `Theme.cs` — `WindowIcons`, `UiShapes`, `ShimmerBar`.
+    - `Forms.cs` — `LogForm`, `TrayAppInfo`, `TrayApps`
+      (`#if MODE_STANDARD`), `UiPhase`, `MainForm`.
+  - `build.cmd`: both csc invocations now compile all `src\*.cs` and gain
+    `/r:System.Web.Extensions.dll` (`System.Management.dll` and
+    `System.ServiceProcess.dll` were already referenced — future waves need
+    all three; adding now avoids build.cmd churn). Defines, manifest,
+    icons, resources and outputs unchanged.
+  - `src\GpuModeSwitch.cs` was deleted only after the split compiled
+    cleanly (content preserved in git history).
+  - **Build verified:** `cmd //c "src\\build.cmd"` from repo root → exit
+    code 0, zero csc diagnostics, output `Build OK:` + `Eco Mode.exe`,
+    `Go Time.exe`. Artifacts: `dist\Go Time.exe` **92,672 bytes** (baseline
+    92,672 — identical) and `dist\Eco Mode.exe` **86,016 bytes** (baseline
+    86,016 — identical). Define split confirmed in the binaries via UTF-16
+    string scan: "System optimizations" / "GO TIME" only in Go Time.exe;
+    "Eco Mode - status" / "ECO MODE" only in Eco Mode.exe. Exes not run
+    (requireAdministrator manifest pops UAC unattended — manual verify).
+  - Handbook updated: §1 (single-file wording), §3 (new file/class map +
+    split notes), §5 (A2 done), §6 (this entry), §8 (rewritten for Wave 3).
+  - Committed as `refactor(split): decompose GpuModeSwitch.cs into seven
+    module files, no behavior change` on `v1.1-logging-cleanup`. Not pushed
+    (never push).
+
 ---
 
 ## §7 Build & verify (exact commands)
@@ -311,18 +355,11 @@ reference — fix the code, never change the compiler or add references outside
 
 ## §8 Next steps
 
-1. **Wave 2 — A2 (decomposition):** split `src\GpuModeSwitch.cs` into
-   `App.cs`, `Theme.cs`, `AsusControl.cs`, `EnergySaver.cs`, `GamePrep.cs`,
-   `Logger.cs`, `Forms.cs` **with zero behavior change** (move code, don't
-   rewrite it; keep `#if MODE_STANDARD`/`#if MODE_ECO` regions intact; update
-   `build.cmd` to compile the new file set; rebuild and verify both exes +
-   all existing flows still work; update §3 of this handbook to match the new
-   file layout).
-2. **Wave 3 — A3 (logging rewrite):** replace `Logger.cs` with the `Log`
-   contract exactly as specified below, migrate every `Logger.Line(...)` call
-   site to the new API, implement per-run files + retention per §4/D1, and
-   keep the Copy log path working (`Log` must expose the current run's log
-   path and text for `LogForm`).
+1. **Wave 3 — A3 (logging rewrite):** replace `src\Logger.cs` (class
+   `Logger`) with the `Log` contract exactly as specified below, migrate
+   every `Logger.Line(...)` call site to the new API, implement per-run
+   files + retention per §4/D1, and keep the Copy log path working (`Log`
+   must expose the current run's log path and text for `LogForm`).
 
 **LOGGER CONTRACT (verbatim — implement exactly this):**
 
@@ -341,7 +378,13 @@ static class Log
 }
 ```
 
-3. After A3: Waves 4+ proceed feature-by-feature per §5 (A4 log window → A5
+Log files: `%LOCALAPPDATA%\GpuModeSwitch\logs\<GoTime|EcoMode>\<App>_yyyy-MM-dd_HHmmss.log`
+(one file per run). Line format: `yyyy-MM-dd HH:mm:ss.fff [LEVEL] (channel)
+message`. Channels: `CLEAN`, `GPU`, `FREEZE`, `POWER`, `TRAY`, `MONITOR`,
+`PROFILE`, `SESSION`. Retention: 30 days, then a 200 MB cap deleted
+oldest-first — **never today's logs**.
+
+2. After A3: Waves 4+ proceed feature-by-feature per §5 (A4 log window → A5
    log browser → A6 analyzer → A7/A8/A9/A10/A11 cleaners/tools → A12 freezer
    → A13 power plans/WU pauser → A14 profiles → A15 session history → A16
    monitor → A17 tray/overlay → A18 GO-flow integration). Each agent: build

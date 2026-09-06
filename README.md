@@ -9,6 +9,19 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.22** — **launch-time selection stage in Go Time**: after probing,
+> Go Time shows **two toggle groups** and waits for **GO**:
+> - **System optimizations** — Game Mode, do-not-disturb, Game DVR recording
+>   off, network throttling off, pause background services (all ticked by
+>   default; untick anything you don't want — unticked items are actively
+>   restored, so a previously paused state doesn't linger).
+> - **Tray apps detected** — Parsec, Google Drive, Jellyfin, Riot Client,
+>   Riot Vanguard; tick the running ones to close.
+> Press GO and only the selected items are applied. Run with `--auto` to skip
+> the selection stage and apply everything immediately. Eco Mode is unchanged
+> (one-click; `--confirm` gives it a confirm stage). The Go Time window grew
+> to 560x640 to fit both groups (still fully resizable).
+>
 > **v1.0.21** — **deeper game prep, still fully reversible**: Go Time now
 > also turns off **Game DVR background recording**, disables **multimedia
 > network throttling** (restored to the Windows default by Eco Mode), and

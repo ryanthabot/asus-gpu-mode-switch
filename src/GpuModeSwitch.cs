@@ -1,8 +1,20 @@
-//  GpuModeSwitch.cs  (v1.0.21)
+//  GpuModeSwitch.cs  (v1.0.22)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
+//
+//  v1.0.22 changes (Go Time):
+//    - Launch-time selection stage: after probing, Go Time shows both toggle
+//      groups - "System optimizations" (Game Mode, do-not-disturb, Game DVR
+//      recording off, network throttling off, pause background services) and
+//      the "Tray apps detected" picker - and waits for the user to press GO.
+//      Only the ticked items are applied; unticked ones are actively
+//      restored (captures/throttling back to defaults, paused services
+//      restarted). --auto skips the selection stage and applies everything.
+//      Eco Mode is unchanged (one-click; --confirm gives it a confirm stage).
+//    - The Go Time window grew to 560x640 to fit both groups; still fully
+//      resizable with the same themed borderless look.
 //
 //  v1.0.21 changes:
 //    - Game prep expanded (still 100% reversible via Eco Mode):
@@ -113,7 +125,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.21";
+        public const string Version = "1.0.22";
 
         [STAThread]
         private static void Main(string[] args)
@@ -125,12 +137,14 @@ namespace GpuModeSwitch
 #endif
 
             bool confirm = false;
+            bool auto = false;
             bool statusOnly = false;
             if (args != null)
             {
                 foreach (string a in args)
                 {
                     if (string.Equals(a, "--confirm", StringComparison.OrdinalIgnoreCase)) confirm = true;
+                    if (string.Equals(a, "--auto", StringComparison.OrdinalIgnoreCase)) auto = true;
                     if (string.Equals(a, "--status", StringComparison.OrdinalIgnoreCase)) statusOnly = true;
                 }
             }
@@ -149,7 +163,7 @@ namespace GpuModeSwitch
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(confirm));
+            Application.Run(new MainForm(confirm, auto));
         }
     }
 
@@ -670,14 +684,14 @@ namespace GpuModeSwitch
                 bool pmOk = EnergySaver.ApplyPowerModeOverlay(eco ? 0u : 3u);
                 bool esApplied = EnergySaver.Sync(eco);
                 o.Detail = "Nothing needed changing.\nCurrent state: dGPU " + (eco ? "off" : "on") +
-                           ", hybrid display path.\n" +
-                           (pmOk
-                               ? "Power Mode: " + (eco ? "Battery saver (best efficiency)." : "Best performance.") + "\n"
-                               : "") +
-                           (esApplied
-                               ? "Windows Energy Saver: " + (eco ? "always on (on battery)." : "off.")
-                               : "Note: Windows Energy Saver could not be changed - see View log.") + "\n" +
-                           (eco ? GamePrep.ApplyForEco() : GamePrep.ApplyForGaming());
+                       ", hybrid display path.\n" +
+                       (pmOk
+                           ? "Power Mode: " + (eco ? "Battery saver (best efficiency)." : "Best performance.") + "\n"
+                           : "") +
+                       (esApplied
+                           ? "Windows Energy Saver: " + (eco ? "always on (on battery)." : "off.")
+                           : "Note: Windows Energy Saver could not be changed - see View log.");
+                if (eco) o.Detail += "\n" + GamePrep.ApplyForEco();
                 Logger.Line("No change needed - already in target mode.");
                 return o;
             }
@@ -783,7 +797,7 @@ namespace GpuModeSwitch
             o.Detail += esSynced
                 ? "\nWindows Energy Saver: " + (eco ? "always on (on battery)." : "off.")
                 : "";
-            o.Detail += "\n" + (eco ? GamePrep.ApplyForEco() : GamePrep.ApplyForGaming());
+            if (eco) o.Detail += "\n" + GamePrep.ApplyForEco();
             Logger.Line("Switch complete (applied live, no restart required).");
             return o;
         }
@@ -986,16 +1000,63 @@ namespace GpuModeSwitch
             }
         }
 
-        // Go Time: game mode on, toasts off, game captures off, network
-        // throttling off, background services paused.
-        public static string ApplyForGaming()
+        // Go Time: applies the ticked system optimizations. Unticked ones are
+        // actively restored, so a previously paused state doesn't linger.
+        public static string ApplyForGaming(bool gameMode, bool dnd, bool dvr, bool throttle, bool pauseServices)
         {
-            SetHkcuDword(@"Software\Microsoft\GameBar", "AutoGameModeEnabled", 1);
-            SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings", "NOC_GLOBAL_SETTING_TOASTS_ENABLED", 0);
-            SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\GameDVR", "AppCaptureEnabled", 0);
-            SetHkcuDword(@"System\GameConfigStore", "GameDVR_Enabled", 0);
-            SetHklmDword(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile", "NetworkThrottlingIndex", 0xFFFFFFFF);
+            List<string> parts = new List<string>();
+            if (gameMode)
+            {
+                SetHkcuDword(@"Software\Microsoft\GameBar", "AutoGameModeEnabled", 1);
+                parts.Add("Game Mode on");
+            }
+            if (dnd)
+            {
+                SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings", "NOC_GLOBAL_SETTING_TOASTS_ENABLED", 0);
+                parts.Add("do-not-disturb on");
+            }
+            else
+            {
+                SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings", "NOC_GLOBAL_SETTING_TOASTS_ENABLED", 1);
+                parts.Add("toasts restored");
+            }
+            if (dvr)
+            {
+                SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\GameDVR", "AppCaptureEnabled", 0);
+                SetHkcuDword(@"System\GameConfigStore", "GameDVR_Enabled", 0);
+                parts.Add("game captures off");
+            }
+            else
+            {
+                SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\GameDVR", "AppCaptureEnabled", 1);
+                SetHkcuDword(@"System\GameConfigStore", "GameDVR_Enabled", 1);
+                parts.Add("game captures on");
+            }
+            if (throttle)
+            {
+                SetHklmDword(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile", "NetworkThrottlingIndex", 0xFFFFFFFF);
+                parts.Add("network throttling off");
+            }
+            else
+            {
+                SetHklmDword(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile", "NetworkThrottlingIndex", 10);
+                parts.Add("network throttling default");
+            }
+            if (pauseServices)
+            {
+                int paused = PauseGamerServices();
+                parts.Add(paused + "/" + GamerServices.Length + " background services paused");
+            }
+            else
+            {
+                int running = RestartGamerServices();
+                parts.Add(running + "/" + GamerServices.Length + " background services restored");
+            }
+            return string.Join(", ", parts.ToArray());
+        }
 
+        private static int PauseGamerServices()
+        {
             int paused = 0;
             foreach (string svc in GamerServices)
             {
@@ -1030,8 +1091,46 @@ namespace GpuModeSwitch
                     Logger.Line("GamePrep: " + svc + " stop failed - " + ex.Message);
                 }
             }
-            return "Game Mode on, do-not-disturb on, game captures off, network throttling off, " +
-                   paused + "/" + GamerServices.Length + " background services paused.";
+            return paused;
+        }
+
+        private static int RestartGamerServices()
+        {
+            int running = 0;
+            foreach (string svc in GamerServices)
+            {
+                try
+                {
+                    using (ServiceController sc = new ServiceController(svc))
+                    {
+                        if (sc.Status == ServiceControllerStatus.Stopped ||
+                            sc.Status == ServiceControllerStatus.StopPending)
+                        {
+                            sc.Start();
+                            try
+                            {
+                                sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
+                                running++;
+                                Logger.Line("GamePrep: restarted " + svc);
+                            }
+                            catch (System.ServiceProcess.TimeoutException)
+                            {
+                                Logger.Line("GamePrep: " + svc + " start timed out - continuing");
+                            }
+                        }
+                        else
+                        {
+                            running++;
+                            Logger.Line("GamePrep: " + svc + " already " + sc.Status);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Line("GamePrep: " + svc + " start failed - " + ex.Message);
+                }
+            }
+            return running;
         }
 
         // Eco Mode: bring everything back.
@@ -1941,11 +2040,14 @@ namespace GpuModeSwitch
         private readonly Button _x = new Button();
         private readonly System.Windows.Forms.Timer _clock = new System.Windows.Forms.Timer();
         private readonly bool _confirmMode;
+        private readonly bool _autoMode;
         private UiPhase _phase = UiPhase.Probe;
         private SwitchOutcome _last;
 #if MODE_STANDARD
         private readonly Label _trayTitle = new Label();
+        private readonly Label _optTitle = new Label();
         private readonly List<CheckBox> _trayBoxes = new List<CheckBox>();
+        private readonly List<CheckBox> _optBoxes = new List<CheckBox>();
         private readonly Button _closeTray = new Button();
         private bool _trayBusy;
 #endif
@@ -1962,9 +2064,10 @@ namespace GpuModeSwitch
         private readonly Color _accent = Color.FromArgb(255, 70, 85);
 #endif
 
-        public MainForm(bool confirmMode)
+        public MainForm(bool confirmMode, bool autoMode)
         {
             _confirmMode = confirmMode;
+            _autoMode = autoMode;
 
             Text = TargetEco ? "Eco Mode" : "Go Time";
             FormBorderStyle = FormBorderStyle.None;
@@ -1973,8 +2076,8 @@ namespace GpuModeSwitch
             ShowInTaskbar = true;
             StartPosition = FormStartPosition.CenterScreen;
 #if MODE_STANDARD
-            ClientSize = new Size(560, 500);
-            MinimumSize = new Size(560, 500);
+            ClientSize = new Size(560, 640);
+            MinimumSize = new Size(560, 640);
 #else
             ClientSize = new Size(560, 400);
             MinimumSize = new Size(560, 400);
@@ -2041,8 +2144,13 @@ namespace GpuModeSwitch
 
             _detail.ForeColor = Color.FromArgb(165, 165, 172);
             _detail.AutoSize = false;
+#if MODE_STANDARD
+            _detail.Size = new Size(ClientSize.Width - 48, 170);
+            _detail.Location = new Point(24, 368);
+#else
             _detail.Size = new Size(ClientSize.Width - 48, 140);
             _detail.Location = new Point(24, 148);
+#endif
             _detail.BackColor = Color.Transparent;
             _detail.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
@@ -2078,19 +2186,48 @@ namespace GpuModeSwitch
             _close.Click += delegate { Close(); };
 
 #if MODE_STANDARD
+            _optTitle.Text = "System optimizations";
+            _optTitle.ForeColor = Color.FromArgb(165, 165, 172);
+            _optTitle.AutoSize = true;
+            _optTitle.Location = new Point(24, 148);
+            _optTitle.BackColor = Color.Transparent;
+            _optTitle.Visible = false;
+
+            string[] optLabels = { "Game Mode", "Do not disturb", "Game DVR recording off", "Network throttling off", "Pause background services" };
+            Point[] optSpots =
+            {
+                new Point(24, 176), new Point(300, 176),
+                new Point(24, 202), new Point(300, 202),
+                new Point(24, 228), new Point(300, 228)
+            };
+            for (int i = 0; i < optLabels.Length; i++)
+            {
+                CheckBox cb = new CheckBox();
+                cb.Text = optLabels[i];
+                cb.AutoSize = true;
+                cb.Location = optSpots[i];
+                cb.ForeColor = Color.FromArgb(200, 200, 210);
+                cb.BackColor = Color.Transparent;
+                cb.Checked = true;
+                cb.Visible = false;
+                _optBoxes.Add(cb);
+                Controls.Add(cb);
+            }
+            Controls.Add(_optTitle);
+
             _trayTitle.Text = "Tray apps detected:";
             _trayTitle.ForeColor = Color.FromArgb(165, 165, 172);
             _trayTitle.AutoSize = true;
-            _trayTitle.Location = new Point(24, 296);
+            _trayTitle.Location = new Point(24, 258);
             _trayTitle.BackColor = Color.Transparent;
             _trayTitle.Visible = false;
 
             string[] trayLabels = { "Parsec", "Google Drive", "Jellyfin", "Riot Client", "Riot Vanguard" };
             Point[] traySpots =
             {
-                new Point(24, 324), new Point(300, 324),
-                new Point(24, 350), new Point(300, 350),
-                new Point(24, 376)
+                new Point(24, 282), new Point(300, 282),
+                new Point(24, 308), new Point(300, 308),
+                new Point(24, 334)
             };
             for (int i = 0; i < trayLabels.Length; i++)
             {
@@ -2112,8 +2249,7 @@ namespace GpuModeSwitch
             _closeTray.ForeColor = Color.White;
             _closeTray.BackColor = Color.FromArgb(42, 42, 49);
             _closeTray.Size = new Size(150, 30);
-            _closeTray.Location = new Point(ClientSize.Width - 174, 370);
-            _closeTray.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _closeTray.Location = new Point(300, 330);
             _closeTray.TabStop = false;
             _closeTray.Visible = false;
             _closeTray.Click += delegate { BeginCloseTrayApps(); };
@@ -2321,6 +2457,17 @@ namespace GpuModeSwitch
                         EnterResult(false, "ASUS hardware interface not found", msg);
                         return;
                     }
+#if MODE_STANDARD
+                    if (_autoMode)
+                    {
+                        // --auto: apply everything (all optimizations on) with
+                        // no tray app closing and no selection stage.
+                        Logger.Line("UI: --auto given, applying right away");
+                        BeginApply();
+                        return;
+                    }
+                    EnterSelect(msg);
+#else
                     if (!_confirmMode)
                     {
                         // One-click: flow straight from probing into applying.
@@ -2329,6 +2476,7 @@ namespace GpuModeSwitch
                         return;
                     }
                     EnterConfirm(msg);
+#endif
                 });
             });
         }
@@ -2338,6 +2486,7 @@ namespace GpuModeSwitch
             _phase = UiPhase.Confirm;
             _bar.Active = false;
             HideAllButtons();
+            _apply.Text = "Apply";
             _apply.Visible = true;
             _cancel.Visible = true;
             _status.ForeColor = Color.FromArgb(235, 235, 240);
@@ -2347,6 +2496,27 @@ namespace GpuModeSwitch
                 "run the other app to switch back.";
             Logger.Line("UI: waiting for Apply");
         }
+
+#if MODE_STANDARD
+        // Selection stage: both toggle groups are shown at launch and the
+        // user decides which optimizations (and tray apps) to apply.
+        private void EnterSelect(string precheckText)
+        {
+            _phase = UiPhase.Confirm;
+            _bar.Active = false;
+            HideAllButtons();
+            _optTitle.Visible = true;
+            foreach (CheckBox cb in _optBoxes) { cb.Visible = true; cb.Checked = true; cb.Enabled = true; }
+            ShowTraySection();
+            _apply.Text = "GO";
+            _apply.Visible = true;
+            _cancel.Visible = true;
+            _status.ForeColor = Color.FromArgb(235, 235, 240);
+            _status.Text = "Ready - choose optimizations, then press GO";
+            _detail.Text = precheckText;
+            Logger.Line("UI: selection stage");
+        }
+#endif
 
         private void BeginApply()
         {
@@ -2360,8 +2530,26 @@ namespace GpuModeSwitch
             _detail.Text = "";
             Logger.Line("UI: applying");
 
+#if MODE_STANDARD
+            // Capture the launch-time selections (UI thread).
+            List<TrayAppInfo> toClose = GatherSelectedTrayApps();
+            bool fGameMode = _optBoxes[0].Checked;
+            bool fDnd = _optBoxes[1].Checked;
+            bool fDvr = _optBoxes[2].Checked;
+            bool fThrottle = _optBoxes[3].Checked;
+            bool fServices = _optBoxes[4].Checked;
+            HideOptGroup();
+            _trayTitle.Visible = false;
+            foreach (CheckBox cb in _trayBoxes) cb.Visible = false;
+            Logger.Line("UI: selections - GameMode=" + fGameMode + " DND=" + fDnd + " DVR=" + fDvr +
+                        " Throttle=" + fThrottle + " Services=" + fServices + " TrayToClose=" + toClose.Count);
+#endif
+
             RunBg(delegate
             {
+#if MODE_STANDARD
+                foreach (TrayAppInfo a in toClose) TrayApps.Close(a);
+#endif
                 SwitchOutcome r;
                 try
                 {
@@ -2374,9 +2562,34 @@ namespace GpuModeSwitch
                     r.Headline = "Unexpected error";
                     r.Detail = ex.Message + "\n\nFull details: View log.";
                 }
+#if MODE_STANDARD
+                if (r.Ok)
+                {
+                    string prep = GamePrep.ApplyForGaming(fGameMode, fDnd, fDvr, fThrottle, fServices);
+                    if (prep.Length > 0) r.Detail += "\n" + prep;
+                }
+#endif
                 SafeInvoke(delegate { EnterResult(r.Ok, r.Headline, r.Detail, r); });
             });
         }
+
+#if MODE_STANDARD
+        private void HideOptGroup()
+        {
+            _optTitle.Visible = false;
+            foreach (CheckBox cb in _optBoxes) cb.Visible = false;
+        }
+
+        private List<TrayAppInfo> GatherSelectedTrayApps()
+        {
+            List<TrayAppInfo> list = new List<TrayAppInfo>();
+            for (int i = 0; i < TrayApps.Known.Length && i < _trayBoxes.Count; i++)
+            {
+                if (_trayBoxes[i].Checked && TrayApps.Known[i].Running) list.Add(TrayApps.Known[i]);
+            }
+            return list;
+        }
+#endif
 
         private void EnterResult(bool ok, string headline, string detail)
         {

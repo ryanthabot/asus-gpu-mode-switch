@@ -49,7 +49,7 @@ namespace GpuModeSwitch
             box.Font = new Font("Consolas", 9f);
             box.Dock = DockStyle.Fill;
             box.HideSelection = false;      // keep the selection visible without focus
-            box.Text = Logger.Text;
+            box.Text = Log.Snapshot();
             box.SelectAll();                // pre-selected: Ctrl+C copies immediately
 
             Button copy = new Button();
@@ -65,13 +65,13 @@ namespace GpuModeSwitch
             {
                 try
                 {
-                    Clipboard.SetText(Logger.Text);
+                    Clipboard.SetText(Log.Snapshot());
                     copy.Text = "Copied!";
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show("Clipboard copy failed: " + ex.Message +
-                        "\n\nThe log file is at:\n" + Logger.FilePath,
+                        "\n\nThe log file is at:\n" + Log.CurrentLogPath,
                         "Diagnostic log", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             };
@@ -97,7 +97,7 @@ namespace GpuModeSwitch
             buttons.Controls.Add(close);
 
             Label pathLabel = new Label();
-            pathLabel.Text = "Log file: " + Logger.FilePath;
+            pathLabel.Text = "Log file: " + Log.CurrentLogPath;
             pathLabel.ForeColor = Color.FromArgb(140, 140, 148);
             pathLabel.AutoEllipsis = true;
             pathLabel.Dock = DockStyle.Top;
@@ -186,7 +186,7 @@ namespace GpuModeSwitch
                     }
                     if (a.Running) break;
                 }
-                Logger.Line("TrayApps: " + a.Label + " " + (a.Running ? "running" : "not running"));
+                Log.Chan("TRAY", "TrayApps: " + a.Label + " " + (a.Running ? "running" : "not running"));
             }
         }
 
@@ -199,7 +199,7 @@ namespace GpuModeSwitch
 
             for (int round = 1; round <= 3; round++)
             {
-                Logger.Line("TrayApps: close attempt " + round + "/3 for " + app.Label);
+                Log.Chan("TRAY", "TrayApps: close attempt " + round + "/3 for " + app.Label);
 
                 foreach (string s in services)
                 {
@@ -214,18 +214,18 @@ namespace GpuModeSwitch
                                 try
                                 {
                                     sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
-                                    Logger.Line("TrayApps: stopped service " + s);
+                                    Log.Chan("TRAY", "TrayApps: stopped service " + s);
                                 }
                                 catch (System.ServiceProcess.TimeoutException)
                                 {
-                                    Logger.Line("TrayApps: service " + s + " stop timed out");
+                                    Log.Chan("TRAY", "TrayApps: service " + s + " stop timed out");
                                 }
                             }
                         }
                     }
                     catch (Exception ex)
                     {
-                        Logger.Line("TrayApps: service " + s + " stop failed - " + ex.Message);
+                        Log.Chan("TRAY", "TrayApps: service " + s + " stop failed - " + ex.Message);
                     }
                 }
 
@@ -234,13 +234,13 @@ namespace GpuModeSwitch
                 Detect();
                 if (!app.Running)
                 {
-                    Logger.Line("TrayApps: " + app.Label + " fully closed");
+                    Log.Chan("TRAY", "TrayApps: " + app.Label + " fully closed");
                     return;
                 }
-                Logger.Line("TrayApps: " + app.Label + " still running - retrying");
+                Log.Chan("TRAY", "TrayApps: " + app.Label + " still running - retrying");
             }
 
-            Logger.Line("TrayApps: " + app.Label + " could not be fully closed - its watchdog may keep restarting it");
+            Log.Chan("TRAY", "TrayApps: " + app.Label + " could not be fully closed - its watchdog may keep restarting it");
         }
 
         // Scan the Services registry for services whose ImagePath contains one
@@ -269,7 +269,7 @@ namespace GpuModeSwitch
                                     if (cand.Length > 4 && path.Contains(cand))
                                     {
                                         found.Add(name);
-                                        Logger.Line("TrayApps: matched service '" + name + "' (" + path.Trim() + ")");
+                                        Log.Chan("TRAY", "TrayApps: matched service '" + name + "' (" + path.Trim() + ")");
                                         break;
                                     }
                                 }
@@ -281,7 +281,7 @@ namespace GpuModeSwitch
             }
             catch (Exception ex)
             {
-                Logger.Line("TrayApps: service scan failed - " + ex.Message);
+                Log.Chan("TRAY", "TrayApps: service scan failed - " + ex.Message);
             }
             return found;
         }
@@ -307,12 +307,12 @@ namespace GpuModeSwitch
                 try
                 {
                     p.Kill();
-                    if (p.WaitForExit(3000)) Logger.Line("TrayApps: closed " + p.ProcessName);
-                    else Logger.Line("TrayApps: " + p.ProcessName + " did not exit in time");
+                    if (p.WaitForExit(3000)) Log.Chan("TRAY", "TrayApps: closed " + p.ProcessName);
+                    else Log.Chan("TRAY", "TrayApps: " + p.ProcessName + " did not exit in time");
                 }
                 catch (Exception ex)
                 {
-                    Logger.Line("TrayApps: could not close " + p.ProcessName + " - " + ex.Message);
+                    Log.Chan("TRAY", "TrayApps: could not close " + p.ProcessName + " - " + ex.Message);
                 }
             }
         }
@@ -625,7 +625,7 @@ namespace GpuModeSwitch
 
             _trayBusy = true;
             _closeTray.Enabled = false;
-            Logger.Line("TrayApps: closing " + selected.Count + " selected app(s)");
+            Log.Chan("TRAY", "TrayApps: closing " + selected.Count + " selected app(s)");
             RunBg(delegate
             {
                 foreach (TrayAppInfo a in selected) TrayApps.Close(a);
@@ -747,7 +747,7 @@ namespace GpuModeSwitch
             _status.ForeColor = Color.FromArgb(235, 235, 240);
             _status.Text = "Contacting ASUS hardware...";
             _detail.Text = "";
-            Logger.Line("UI: probing");
+            Log.Info("UI: probing");
 
             RunBg(delegate
             {
@@ -765,7 +765,7 @@ namespace GpuModeSwitch
                     {
                         // --auto: apply everything (all optimizations on) with
                         // no tray app closing and no selection stage.
-                        Logger.Line("UI: --auto given, applying right away");
+                        Log.Info("UI: --auto given, applying right away");
                         BeginApply();
                         return;
                     }
@@ -774,7 +774,7 @@ namespace GpuModeSwitch
                     if (!_confirmMode)
                     {
                         // One-click: flow straight from probing into applying.
-                        Logger.Line("UI: one-click mode, applying right away");
+                        Log.Info("UI: one-click mode, applying right away");
                         BeginApply();
                         return;
                     }
@@ -797,7 +797,7 @@ namespace GpuModeSwitch
             _detail.Text = precheckText + "\n\n" +
                 "Switching applies immediately and is reversible -\n" +
                 "run the other app to switch back.";
-            Logger.Line("UI: waiting for Apply");
+            Log.Info("UI: waiting for Apply");
         }
 
 #if MODE_STANDARD
@@ -817,7 +817,7 @@ namespace GpuModeSwitch
             _status.ForeColor = Color.FromArgb(235, 235, 240);
             _status.Text = "Ready - choose optimizations, then press GO";
             _detail.Text = precheckText;
-            Logger.Line("UI: selection stage");
+            Log.Info("UI: selection stage");
         }
 #endif
 
@@ -831,7 +831,7 @@ namespace GpuModeSwitch
             _status.ForeColor = Color.FromArgb(235, 235, 240);
             _status.Text = "Applying " + (TargetEco ? "Eco Mode" : "Standard mode") + "...";
             _detail.Text = "";
-            Logger.Line("UI: applying");
+            Log.Info("UI: applying");
 
 #if MODE_STANDARD
             // Capture the launch-time selections (UI thread).
@@ -844,7 +844,7 @@ namespace GpuModeSwitch
             HideOptGroup();
             _trayTitle.Visible = false;
             foreach (CheckBox cb in _trayBoxes) cb.Visible = false;
-            Logger.Line("UI: selections - GameMode=" + fGameMode + " DND=" + fDnd + " DVR=" + fDvr +
+            Log.Info("UI: selections - GameMode=" + fGameMode + " DND=" + fDnd + " DVR=" + fDvr +
                         " Throttle=" + fThrottle + " Services=" + fServices + " TrayToClose=" + toClose.Count);
 #endif
 
@@ -860,7 +860,7 @@ namespace GpuModeSwitch
                 }
                 catch (Exception ex)
                 {
-                    Logger.Line("UNEXPECTED ERROR: " + ex.GetType().Name + ": " + ex.Message + "\r\n" + ex.StackTrace);
+                    Log.Error("UNEXPECTED ERROR", ex);
                     r = new SwitchOutcome();
                     r.Headline = "Unexpected error";
                     r.Detail = ex.Message + "\n\nFull details: View log.";
@@ -927,7 +927,7 @@ namespace GpuModeSwitch
                 try { work(); }
                 catch (Exception ex)
                 {
-                    Logger.Line("BACKGROUND ERROR: " + ex.GetType().Name + ": " + ex.Message);
+                    Log.Error("BACKGROUND ERROR", ex);
                     SafeInvoke(delegate
                     {
                         EnterResult(false, "Unexpected error",

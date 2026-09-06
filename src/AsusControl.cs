@@ -75,11 +75,11 @@ namespace GpuModeSwitch
             int err = Marshal.GetLastWin32Error();
             if (h == new IntPtr(-1) || h == IntPtr.Zero)
             {
-                Logger.Line("ATKACPI: open failed (Win32 error " + err + ")");
+                Log.Chan("GPU", "ATKACPI: open failed (Win32 error " + err + ")");
                 return false;
             }
             _handle = h;
-            Logger.Line("ATKACPI: device opened");
+            Log.Chan("GPU", "ATKACPI: device opened");
             return true;
         }
 
@@ -114,7 +114,7 @@ namespace GpuModeSwitch
             if (ok) outVal = BitConverter.ToInt32(outBuf, 0);
 
             // GetLastWin32Error is only meaningful when the call failed.
-            Logger.Line(string.Format("  ATKACPI {0} dev=0x{1:X8} val={2} -> ok={3} raw=0x{4:X8}{5}",
+            Log.Chan("GPU", string.Format("  ATKACPI {0} dev=0x{1:X8} val={2} -> ok={3} raw=0x{4:X8}{5}",
                 label, deviceId, value, ok, (long)outVal, ok ? "" : " (win32err=" + err + ")"));
             return outVal;
         }
@@ -154,12 +154,12 @@ namespace GpuModeSwitch
                 foreach (ManagementObject o in results) { _object = o; break; }
                 results.Dispose();
                 searcher.Dispose();
-                Logger.Line("WMI " + _className + ": " + (_object != null ? "class found" : "class not present"));
+                Log.Chan("GPU", "WMI " + _className + ": " + (_object != null ? "class found" : "class not present"));
                 return _object != null;
             }
             catch (Exception ex)
             {
-                Logger.Line("WMI " + _className + ": query failed - " + ex.Message);
+                Log.Chan("GPU", "WMI " + _className + ": query failed - " + ex.Message);
                 return false;
             }
         }
@@ -226,12 +226,12 @@ namespace GpuModeSwitch
                 }
                 if (val == null || val.Value == null) return -1;
                 int raw = unchecked((int)ToUint(val.Value));
-                Logger.Line(string.Format("  WMI {0} DSTS dev=0x{1:X8} -> raw=0x{2:X8}", _className, deviceId, (long)raw));
+                Log.Chan("GPU", string.Format("  WMI {0} DSTS dev=0x{1:X8} -> raw=0x{2:X8}", _className, deviceId, (long)raw));
                 return raw;
             }
             catch (Exception ex)
             {
-                Logger.Line("  WMI " + _className + " DSTS dev=0x" + deviceId.ToString("X8") + " failed - " + ex.Message);
+                Log.Chan("GPU", "  WMI " + _className + " DSTS dev=0x" + deviceId.ToString("X8") + " failed - " + ex.Message);
                 return -1;
             }
         }
@@ -245,7 +245,7 @@ namespace GpuModeSwitch
                 ManagementBaseObject outParams = _object.InvokeMethod("DEVS", inParams, null);
                 if (outParams == null)
                 {
-                    Logger.Line(string.Format("  WMI {0} DEVS dev=0x{1:X8} val={2} -> no output", _className, deviceId, value));
+                    Log.Chan("GPU", string.Format("  WMI {0} DEVS dev=0x{1:X8} val={2} -> no output", _className, deviceId, value));
                     return true;
                 }
 
@@ -253,16 +253,16 @@ namespace GpuModeSwitch
                 if (rc == null) rc = FindProperty(outParams.Properties, "ReturnValue");
                 if (rc == null || rc.Value == null)
                 {
-                    Logger.Line(string.Format("  WMI {0} DEVS dev=0x{1:X8} val={2} -> no result code (treated as OK)", _className, deviceId, value));
+                    Log.Chan("GPU", string.Format("  WMI {0} DEVS dev=0x{1:X8} val={2} -> no result code (treated as OK)", _className, deviceId, value));
                     return true;
                 }
                 uint code = ToUint(rc.Value);
-                Logger.Line(string.Format("  WMI {0} DEVS dev=0x{1:X8} val={2} -> result={3}", _className, deviceId, value, code));
+                Log.Chan("GPU", string.Format("  WMI {0} DEVS dev=0x{1:X8} val={2} -> result={3}", _className, deviceId, value, code));
                 return code == 0 || code == 1;   // firmware reports 1 on success
             }
             catch (Exception ex)
             {
-                Logger.Line("  WMI " + _className + " DEVS dev=0x" + deviceId.ToString("X8") + " failed - " + ex.Message);
+                Log.Chan("GPU", "  WMI " + _className + " DEVS dev=0x" + deviceId.ToString("X8") + " failed - " + ex.Message);
                 return false;
             }
         }
@@ -310,28 +310,28 @@ namespace GpuModeSwitch
         {
             if (raw < 0)
             {
-                Logger.Line("  normalize " + what + ": raw<0 -> unsupported/failed");
+                Log.Chan("GPU", "  normalize " + what + ": raw<0 -> unsupported/failed");
                 return -1;
             }
             if ((raw & 0xFFFF0000) == 0)
             {
-                Logger.Line("  normalize " + what + ": raw=0x" + raw.ToString("X8") +
+                Log.Chan("GPU", "  normalize " + what + ": raw=0x" + raw.ToString("X8") +
                             " -> no status bits, device not implemented");
                 return -1;
             }
             int v = raw - 0x10000;
             if (v == 0 || v == 1)
             {
-                Logger.Line("  normalize " + what + ": raw=0x" + raw.ToString("X8") + " -> " + v);
+                Log.Chan("GPU", "  normalize " + what + ": raw=0x" + raw.ToString("X8") + " -> " + v);
                 return v;
             }
             v = raw & 0xFFFF;
             if (v == 0 || v == 1)
             {
-                Logger.Line("  normalize " + what + ": raw=0x" + raw.ToString("X8") + " -> " + v);
+                Log.Chan("GPU", "  normalize " + what + ": raw=0x" + raw.ToString("X8") + " -> " + v);
                 return v;
             }
-            Logger.Line("  normalize " + what + ": raw=0x" + raw.ToString("X8") + " -> UNRECOGNIZED");
+            Log.Chan("GPU", "  normalize " + what + ": raw=0x" + raw.ToString("X8") + " -> UNRECOGNIZED");
             return -1;
         }
 
@@ -351,7 +351,7 @@ namespace GpuModeSwitch
 
             foreach (AsusTransport t in candidates)
             {
-                Logger.Line("Probing transport: " + t.Name);
+                Log.Chan("GPU", "Probing transport: " + t.Name);
                 if (!t.Open()) continue;
 
                 for (int i = 0; i < dgpuIds.Length; i++)
@@ -364,7 +364,7 @@ namespace GpuModeSwitch
                     _dgpuId = dgpuIds[i];
                     _muxId = muxIds[i];
                     _muxSupported = NormalizeState(t.ReadRaw(_muxId), "MUX probe 0x" + _muxId.ToString("X8")) >= 0;
-                    Logger.Line("Selected: " + t.Name + "  dGPU=0x" + _dgpuId.ToString("X8") +
+                    Log.Chan("GPU", "Selected: " + t.Name + "  dGPU=0x" + _dgpuId.ToString("X8") +
                                 "  MUX=0x" + _muxId.ToString("X8") + ( _muxSupported ? " (supported)" : " (not present)"));
                     return true;
                 }
@@ -379,7 +379,7 @@ namespace GpuModeSwitch
                 "driver that comes with Armoury Crate / MyASUS. Install or\n" +
                 "repair Armoury Crate, reboot, and run this app again.\n\n" +
                 "Full details: View log.";
-            Logger.Line("PROBE FAILED: no transport answered.");
+            Log.Chan("GPU", "PROBE FAILED: no transport answered.");
             return false;
         }
 
@@ -421,14 +421,14 @@ namespace GpuModeSwitch
             {
                 s += "\nAlready in the target mode - Apply will simply confirm it.";
             }
-            Logger.Line("Precheck done: " + s.Replace("\n", " | "));
+            Log.Chan("GPU", "Precheck done: " + s.Replace("\n", " | "));
             return s;
         }
 
         public static SwitchOutcome SwitchTo(bool eco)
         {
             SwitchOutcome o = new SwitchOutcome();
-            Logger.Line("=== Switch requested: " + (eco ? "ECO (dGPU off)" : "STANDARD (dGPU on)") + " ===");
+            Log.Chan("GPU", "=== Switch requested: " + (eco ? "ECO (dGPU off)" : "STANDARD (dGPU on)") + " ===");
 
             if (!Available)
             {
@@ -439,7 +439,7 @@ namespace GpuModeSwitch
 
             int gpuBefore = GetDgpuState();
             int muxBefore = MuxSupported ? GetMuxState() : -1;
-            Logger.Line(string.Format("State before switch: dGPU={0} (0=on 1=off) MUX={1} (0=dGPU-direct 1=hybrid)", gpuBefore, muxBefore));
+            Log.Chan("GPU", string.Format("State before switch: dGPU={0} (0=on 1=off) MUX={1} (0=dGPU-direct 1=hybrid)", gpuBefore, muxBefore));
 
             // Live toggle first - this is what Armoury Crate does: just flip
             // the dGPU power flag and let the driver follow. The MUX/display
@@ -463,7 +463,7 @@ namespace GpuModeSwitch
                            ? "Windows Energy Saver: " + (eco ? "always on (on battery)." : "off.")
                            : "Note: Windows Energy Saver could not be changed - see View log.");
                 if (eco) o.Detail += "\n" + GamePrep.ApplyForEco();
-                Logger.Line("No change needed - already in target mode.");
+                Log.Chan("GPU", "No change needed - already in target mode.");
                 return o;
             }
 
@@ -472,26 +472,26 @@ namespace GpuModeSwitch
                 // Release the NVIDIA driver first so the firmware can
                 // actually cut power when the flag is written (G-Helper
                 // order: stop service, then write the eco flag).
-                Logger.Line("Releasing NVIDIA driver service before the eco write...");
+                Log.Chan("GPU", "Releasing NVIDIA driver service before the eco write...");
                 GpuServices.StopAll();
             }
 
-            Logger.Line("Writing dGPU power flag: " + want);
+            Log.Chan("GPU", "Writing dGPU power flag: " + want);
             bool written = _transport.Write(_dgpuId, (uint)want);
 
             if (!written && eco)
             {
                 // The firmware can refuse while the GPU is busy; the
                 // service is released now, so retry once.
-                Logger.Line("dGPU write refused - retrying once after NV service release");
+                Log.Chan("GPU", "dGPU write refused - retrying once after NV service release");
                 GpuServices.StopAll();
                 written = _transport.Write(_dgpuId, (uint)want);
-                if (written) Logger.Line("dGPU write accepted on retry.");
+                if (written) Log.Chan("GPU", "dGPU write accepted on retry.");
             }
 
             if (!written)
             {
-                Logger.Line("dGPU write refused by firmware.");
+                Log.Chan("GPU", "dGPU write refused by firmware.");
 
                 // One case genuinely needs a restart: the display path itself
                 // runs through the dGPU (Ultimate / hard MUX mode). Move the
@@ -499,7 +499,7 @@ namespace GpuModeSwitch
                 if (MuxSupported && muxBefore == 0)
                 {
                     bool muxWrite = _transport.Write(_muxId, 1);
-                    Logger.Line("MUX -> hybrid write result: " + muxWrite + " (applies at restart)");
+                    Log.Chan("GPU", "MUX -> hybrid write result: " + muxWrite + " (applies at restart)");
 
                     o.Ok = true;
                     o.Changed = true;
@@ -520,7 +520,7 @@ namespace GpuModeSwitch
             }
 
             int gpuAfter = GetDgpuState();
-            Logger.Line("State after switch: dGPU=" + gpuAfter + " (want " + want + ")");
+            Log.Chan("GPU", "State after switch: dGPU=" + gpuAfter + " (want " + want + ")");
             if (gpuAfter != want)
             {
                 o.Headline = "The change did not stick";
@@ -535,7 +535,7 @@ namespace GpuModeSwitch
                 // Give the bus a moment to re-enumerate the powered-on GPU,
                 // then restart the NVIDIA driver service so it comes back
                 // usable immediately - no reboot needed.
-                Logger.Line("Waiting 3s for the dGPU to re-enumerate...");
+                Log.Chan("GPU", "Waiting 3s for the dGPU to re-enumerate...");
                 Thread.Sleep(3000);
                 GpuServices.RestartAll();
             }
@@ -558,7 +558,7 @@ namespace GpuModeSwitch
 
             // Sync the Power Mode overlay (works on all builds) and the Energy
             // Saver threshold (older builds) with the mode.
-            Logger.Line("Power Mode overlay: setting " + (eco ? "0 (Battery saver / best efficiency)" : "3 (Best performance)"));
+            Log.Chan("POWER", "Power Mode overlay: setting " + (eco ? "0 (Battery saver / best efficiency)" : "3 (Best performance)"));
             bool pmSynced = EnergySaver.ApplyPowerModeOverlay(eco ? 0u : 3u);
             bool esSynced = EnergySaver.Sync(eco);
 
@@ -569,7 +569,7 @@ namespace GpuModeSwitch
                 ? "\nWindows Energy Saver: " + (eco ? "always on (on battery)." : "off.")
                 : "";
             if (eco) o.Detail += "\n" + GamePrep.ApplyForEco();
-            Logger.Line("Switch complete (applied live, no restart required).");
+            Log.Chan("GPU", "Switch complete (applied live, no restart required).");
             return o;
         }
 
@@ -580,7 +580,7 @@ namespace GpuModeSwitch
 
         public static string DescribeState()
         {
-            if (!Available) return _lastError + "\n\n(Log: " + Logger.FilePath + ")";
+            if (!Available) return _lastError + "\n\n(Log: " + Log.CurrentLogPath + ")";
 
             int gpu = GetDgpuState();
             string s = "Connected via: " + _transport.Name + "\n";
@@ -640,10 +640,10 @@ namespace GpuModeSwitch
             }
             catch (Exception ex)
             {
-                Logger.Line("NV service lookup failed: " + ex.Message);
+                Log.Chan("GPU", "NV service lookup failed: " + ex.Message);
             }
             if (found.Count == 0)
-                Logger.Line("No NVIDIA Display Container services found (AMD-only system or driver absent).");
+                Log.Chan("GPU", "No NVIDIA Display Container services found (AMD-only system or driver absent).");
             return found.ToArray();
         }
 
@@ -664,22 +664,22 @@ namespace GpuModeSwitch
                         try
                         {
                             sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
-                            Logger.Line("NV service stopped: " + n);
+                            Log.Chan("GPU", "NV service stopped: " + n);
                         }
                         catch (System.ServiceProcess.TimeoutException)
                         {
-                            Logger.Line("NV service stop timed out after 15s (" + n + ") - continuing, non-fatal");
+                            Log.Chan("GPU", "NV service stop timed out after 15s (" + n + ") - continuing, non-fatal");
                         }
                     }
                         else
                         {
-                            Logger.Line("NV service already " + sc.Status + ": " + n);
+                            Log.Chan("GPU", "NV service already " + sc.Status + ": " + n);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Logger.Line("NV service stop failed (" + n + "): " + ex.Message);
+                    Log.Chan("GPU", "NV service stop failed (" + n + "): " + ex.Message);
                 }
             }
         }
@@ -702,21 +702,21 @@ namespace GpuModeSwitch
                             try
                             {
                                 sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
-                                Logger.Line("NV service stopped for restart: " + n);
+                                Log.Chan("GPU", "NV service stopped for restart: " + n);
                             }
                             catch (System.ServiceProcess.TimeoutException)
                             {
-                                Logger.Line("NV service stop timed out (" + n + ") - attempting start anyway");
+                                Log.Chan("GPU", "NV service stop timed out (" + n + ") - attempting start anyway");
                             }
                         }
                         sc.Start();
                         sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
-                        Logger.Line("NV service running: " + n);
+                        Log.Chan("GPU", "NV service running: " + n);
                     }
                 }
                 catch (Exception ex)
                 {
-                    Logger.Line("NV service restart failed (" + n + "): " + ex.Message);
+                    Log.Chan("GPU", "NV service restart failed (" + n + "): " + ex.Message);
                 }
             }
         }

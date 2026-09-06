@@ -34,14 +34,14 @@ namespace GpuModeSwitch
             {
                 using (RegistryKey k = Registry.CurrentUser.CreateSubKey(subKey))
                 {
-                    if (k == null) { Logger.Line("GamePrep: HKCU write failed - " + subKey); return; }
+                    if (k == null) { Log.Info("GamePrep: HKCU write failed - " + subKey); return; }
                     k.SetValue(valueName, value, RegistryValueKind.DWord);
-                    Logger.Line("GamePrep: " + valueName + " = " + value);
+                    Log.Info("GamePrep: " + valueName + " = " + value);
                 }
             }
             catch (Exception ex)
             {
-                Logger.Line("GamePrep: HKCU write failed - " + ex.Message);
+                Log.Info("GamePrep: HKCU write failed - " + ex.Message);
             }
         }
 
@@ -51,14 +51,14 @@ namespace GpuModeSwitch
             {
                 using (RegistryKey k = Registry.LocalMachine.OpenSubKey(subKey, true))
                 {
-                    if (k == null) { Logger.Line("GamePrep: HKLM write failed - " + subKey); return; }
+                    if (k == null) { Log.Info("GamePrep: HKLM write failed - " + subKey); return; }
                     k.SetValue(valueName, value, RegistryValueKind.DWord);
-                    Logger.Line("GamePrep: HKLM " + valueName + " = " + value);
+                    Log.Info("GamePrep: HKLM " + valueName + " = " + value);
                 }
             }
             catch (Exception ex)
             {
-                Logger.Line("GamePrep: HKLM write failed - " + ex.Message);
+                Log.Info("GamePrep: HKLM write failed - " + ex.Message);
             }
         }
 
@@ -134,23 +134,23 @@ namespace GpuModeSwitch
                             {
                                 sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
                                 paused++;
-                                Logger.Line("GamePrep: paused " + svc);
+                                Log.Info("GamePrep: paused " + svc);
                             }
                             catch (System.ServiceProcess.TimeoutException)
                             {
-                                Logger.Line("GamePrep: " + svc + " stop timed out - continuing");
+                                Log.Info("GamePrep: " + svc + " stop timed out - continuing");
                             }
                         }
                         else
                         {
                             paused++;
-                            Logger.Line("GamePrep: " + svc + " already " + sc.Status);
+                            Log.Info("GamePrep: " + svc + " already " + sc.Status);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Logger.Line("GamePrep: " + svc + " stop failed - " + ex.Message);
+                    Log.Info("GamePrep: " + svc + " stop failed - " + ex.Message);
                 }
             }
             return paused;
@@ -173,23 +173,23 @@ namespace GpuModeSwitch
                             {
                                 sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
                                 running++;
-                                Logger.Line("GamePrep: restarted " + svc);
+                                Log.Info("GamePrep: restarted " + svc);
                             }
                             catch (System.ServiceProcess.TimeoutException)
                             {
-                                Logger.Line("GamePrep: " + svc + " start timed out - continuing");
+                                Log.Info("GamePrep: " + svc + " start timed out - continuing");
                             }
                         }
                         else
                         {
                             running++;
-                            Logger.Line("GamePrep: " + svc + " already " + sc.Status);
+                            Log.Info("GamePrep: " + svc + " already " + sc.Status);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Logger.Line("GamePrep: " + svc + " start failed - " + ex.Message);
+                    Log.Info("GamePrep: " + svc + " start failed - " + ex.Message);
                 }
             }
             return running;
@@ -218,23 +218,23 @@ namespace GpuModeSwitch
                             {
                                 sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
                                 running++;
-                                Logger.Line("GamePrep: restarted " + svc);
+                                Log.Info("GamePrep: restarted " + svc);
                             }
                             catch (System.ServiceProcess.TimeoutException)
                             {
-                                Logger.Line("GamePrep: " + svc + " start timed out - continuing");
+                                Log.Info("GamePrep: " + svc + " start timed out - continuing");
                             }
                         }
                         else
                         {
                             running++;
-                            Logger.Line("GamePrep: " + svc + " already " + sc.Status);
+                            Log.Info("GamePrep: " + svc + " already " + sc.Status);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Logger.Line("GamePrep: " + svc + " start failed - " + ex.Message);
+                    Log.Info("GamePrep: " + svc + " start failed - " + ex.Message);
                 }
             }
             return "Toasts restored, game captures on, network throttling default, " +

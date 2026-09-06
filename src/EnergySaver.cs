@@ -67,25 +67,25 @@ namespace GpuModeSwitch
                 {
                     if (k == null)
                     {
-                        Logger.Line("EnergySaver: read failed - Control\\Power key missing");
+                        Log.Chan("POWER", "EnergySaver: read failed - Control\\Power key missing");
                         return null;
                     }
                     object v = k.GetValue(ValueName);
                     if (v == null)
                     {
-                        Logger.Line("EnergySaver: read failed - value not present yet");
+                        Log.Chan("POWER", "EnergySaver: read failed - value not present yet");
                         return null;
                     }
                     int i = Convert.ToInt32(v);
-                    if (i == 1) { Logger.Line("EnergySaver: saved state=1 (on)"); return true; }
-                    if (i == 2) { Logger.Line("EnergySaver: saved state=2 (off)"); return false; }
-                    Logger.Line("EnergySaver: saved state=" + i + " (unrecognized)");
+                    if (i == 1) { Log.Chan("POWER", "EnergySaver: saved state=1 (on)"); return true; }
+                    if (i == 2) { Log.Chan("POWER", "EnergySaver: saved state=2 (off)"); return false; }
+                    Log.Chan("POWER", "EnergySaver: saved state=" + i + " (unrecognized)");
                     return null;
                 }
             }
             catch (Exception ex)
             {
-                Logger.Line("EnergySaver: read failed - " + ex.Message);
+                Log.Chan("POWER", "EnergySaver: read failed - " + ex.Message);
                 return null;
             }
         }
@@ -100,16 +100,16 @@ namespace GpuModeSwitch
                 {
                     if (k == null)
                     {
-                        Logger.Line("EnergySaver: registry write failed - key missing");
+                        Log.Chan("POWER", "EnergySaver: registry write failed - key missing");
                         return;
                     }
                     k.SetValue(ValueName, v, RegistryValueKind.DWord);
-                    Logger.Line("EnergySaver: persisted state = " + v + " (" + (on ? "ON" : "OFF") + ")");
+                    Log.Chan("POWER", "EnergySaver: persisted state = " + v + " (" + (on ? "ON" : "OFF") + ")");
                 }
             }
             catch (Exception ex)
             {
-                Logger.Line("EnergySaver: registry write failed - " + ex.Message);
+                Log.Chan("POWER", "EnergySaver: registry write failed - " + ex.Message);
             }
         }
 
@@ -120,7 +120,7 @@ namespace GpuModeSwitch
         {
             WriteSavedState(on);
             if (ToggleAlwaysUseEnergySaver(on)) return true;
-            Logger.Line("EnergySaver: Settings automation failed - trying legacy threshold fallback");
+            Log.Chan("POWER", "EnergySaver: Settings automation failed - trying legacy threshold fallback");
             return SetAutoThreshold(on ? 100u : 0u);
         }
 
@@ -187,7 +187,7 @@ namespace GpuModeSwitch
             int sh = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height;
             uint ax = (uint)Math.Round(cx * 65535.0 / sw);
             uint ay = (uint)Math.Round(cy * 65535.0 / sh);
-            Logger.Line("EnergySaver: clicking " + cx + "," + cy);
+            Log.Chan("POWER", "EnergySaver: clicking " + cx + "," + cy);
             mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, ax, ay, 0, UIntPtr.Zero);
             mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
             mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
@@ -220,10 +220,10 @@ namespace GpuModeSwitch
             }
             if (esGroup == null)
             {
-                Logger.Line("EnergySaver: Energy saver card not found on the page");
+                Log.Chan("POWER", "EnergySaver: Energy saver card not found on the page");
                 return false;
             }
-            Logger.Line("EnergySaver: card found at " + gRect.X + "," + gRect.Y);
+            Log.Chan("POWER", "EnergySaver: card found at " + gRect.X + "," + gRect.Y);
 
             foreach (AutomationElement e in all)
             {
@@ -240,7 +240,7 @@ namespace GpuModeSwitch
                     return true;
                 }
             }
-            Logger.Line("EnergySaver: no show-more button inside the card - it appears already expanded");
+            Log.Chan("POWER", "EnergySaver: no show-more button inside the card - it appears already expanded");
             return false;
         }
 
@@ -250,7 +250,7 @@ namespace GpuModeSwitch
             {
                 IntPtr hwnd = (IntPtr)settings.Current.NativeWindowHandle;
                 PostMessage(hwnd, 0x10, IntPtr.Zero, IntPtr.Zero);   // WM_CLOSE
-                Logger.Line("EnergySaver: Settings window closed");
+                Log.Chan("POWER", "EnergySaver: Settings window closed");
             }
             catch { }
         }
@@ -260,14 +260,14 @@ namespace GpuModeSwitch
         // Automation. Works on 24H2+/26200+ where no power API exists.
         public static bool ToggleAlwaysUseEnergySaver(bool on)
         {
-            Logger.Line("EnergySaver: opening Settings > Power & battery > Energy saver");
+            Log.Chan("POWER", "EnergySaver: opening Settings > Power & battery > Energy saver");
             try
             {
                 Process.Start(new ProcessStartInfo("ms-settings:powersleep") { UseShellExecute = true });
             }
             catch (Exception ex)
             {
-                Logger.Line("EnergySaver: could not open Settings - " + ex.Message);
+                Log.Chan("POWER", "EnergySaver: could not open Settings - " + ex.Message);
                 return false;
             }
 
@@ -279,7 +279,7 @@ namespace GpuModeSwitch
             }
             if (settings == null)
             {
-                Logger.Line("EnergySaver: Settings window never appeared");
+                Log.Chan("POWER", "EnergySaver: Settings window never appeared");
                 return false;
             }
             Thread.Sleep(800);
@@ -300,28 +300,28 @@ namespace GpuModeSwitch
                 }
                 if (toggle != null)
                 {
-                    if (attempt > 0) Logger.Line("EnergySaver: toggle found after expanding the card");
+                    if (attempt > 0) Log.Chan("POWER", "EnergySaver: toggle found after expanding the card");
                     break;
                 }
 
                 // Not visible: the card is collapsed - press its own
                 // "Show more settings" button to expand it.
-                Logger.Line("EnergySaver: toggle not visible - expanding the Energy saver card (attempt " + (attempt + 1) + "/3)");
+                Log.Chan("POWER", "EnergySaver: toggle not visible - expanding the Energy saver card (attempt " + (attempt + 1) + "/3)");
                 if (!ClickEnergySaverExpand(settings)) break;
             }
 
             if (toggle == null)
             {
-                Logger.Line("EnergySaver: 'Always use energy saver' toggle not found");
+                Log.Chan("POWER", "EnergySaver: 'Always use energy saver' toggle not found");
                 CloseSettings(settings);
                 return false;
             }
 
             ToggleState before = GetToggleState(toggle);
-            Logger.Line("EnergySaver: 'Always use energy saver' is currently " + before);
+            Log.Chan("POWER", "EnergySaver: 'Always use energy saver' is currently " + before);
             if ((before == ToggleState.On) == on)
             {
-                Logger.Line("EnergySaver: already " + (on ? "ON" : "OFF") + " (verified)");
+                Log.Chan("POWER", "EnergySaver: already " + (on ? "ON" : "OFF") + " (verified)");
                 CloseSettings(settings);
                 return true;
             }
@@ -335,14 +335,14 @@ namespace GpuModeSwitch
                 }
                 else
                 {
-                    Logger.Line("EnergySaver: toggle pattern unavailable");
+                    Log.Chan("POWER", "EnergySaver: toggle pattern unavailable");
                     CloseSettings(settings);
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                Logger.Line("EnergySaver: toggle failed - " + ex.Message);
+                Log.Chan("POWER", "EnergySaver: toggle failed - " + ex.Message);
                 CloseSettings(settings);
                 return false;
             }
@@ -350,7 +350,7 @@ namespace GpuModeSwitch
             Thread.Sleep(700);
             ToggleState after = GetToggleState(toggle);
             bool ok = (after == ToggleState.On) == on;
-            Logger.Line("EnergySaver: toggle now " + after + (ok ? " (verified)" : " (MISMATCH)"));
+            Log.Chan("POWER", "EnergySaver: toggle now " + after + (ok ? " (verified)" : " (MISMATCH)"));
             CloseSettings(settings);
             return ok;
         }
@@ -363,22 +363,22 @@ namespace GpuModeSwitch
                 uint rc = PowerGetActiveScheme(IntPtr.Zero, out p);
                 if (rc != 0)
                 {
-                    Logger.Line("EnergySaver: PowerGetActiveScheme rc=" + rc);
+                    Log.Chan("POWER", "EnergySaver: PowerGetActiveScheme rc=" + rc);
                     return false;
                 }
                 Guid scheme = (Guid)Marshal.PtrToStructure(p, typeof(Guid));
                 Marshal.FreeCoTaskMem(p);
-                Logger.Line("EnergySaver: active scheme " + scheme.ToString("B") +
+                Log.Chan("POWER", "EnergySaver: active scheme " + scheme.ToString("B") +
                             " - setting battery threshold to " + percent + "%");
 
                 Guid sub = SubEnergySaver;
                 Guid set = EsBattThreshold;
 
                 rc = PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, percent);
-                Logger.Line("EnergySaver: PowerWriteDCValueIndex rc=" + rc + " (0 = OK)");
+                Log.Chan("POWER", "EnergySaver: PowerWriteDCValueIndex rc=" + rc + " (0 = OK)");
                 if (rc == 2)
                 {
-                    Logger.Line("EnergySaver: rc=2 (ERROR_FILE_NOT_FOUND) - this Windows build does not " +
+                    Log.Chan("POWER", "EnergySaver: rc=2 (ERROR_FILE_NOT_FOUND) - this Windows build does not " +
                                 "expose the Energy Saver threshold via the legacy power API " +
                                 "(ES moved to the whesvc service on 24H2+/26200+).");
                 }
@@ -386,17 +386,17 @@ namespace GpuModeSwitch
 
                 uint readBack = 0xFFFFFFFF;
                 rc = PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, ref readBack);
-                Logger.Line("EnergySaver: PowerReadDCValueIndex rc=" + rc + " value=" + readBack +
+                Log.Chan("POWER", "EnergySaver: PowerReadDCValueIndex rc=" + rc + " value=" + readBack +
                             (rc == 0 && readBack == percent ? " (verified)" : " (MISMATCH)"));
                 if (rc != 0 || readBack != percent) return false;
 
                 rc = PowerSetActiveScheme(IntPtr.Zero, ref scheme);   // apply now
-                Logger.Line("EnergySaver: PowerSetActiveScheme rc=" + rc + " (0 = OK)");
+                Log.Chan("POWER", "EnergySaver: PowerSetActiveScheme rc=" + rc + " (0 = OK)");
                 return rc == 0;
             }
             catch (Exception ex)
             {
-                Logger.Line("EnergySaver: threshold write failed - " + ex.Message);
+                Log.Chan("POWER", "EnergySaver: threshold write failed - " + ex.Message);
                 return false;
             }
         }
@@ -413,7 +413,7 @@ namespace GpuModeSwitch
                 uint rc = PowerGetActiveScheme(IntPtr.Zero, out p);
                 if (rc != 0)
                 {
-                    Logger.Line("PowerMode: PowerGetActiveScheme rc=" + rc);
+                    Log.Chan("POWER", "PowerMode: PowerGetActiveScheme rc=" + rc);
                     return false;
                 }
                 Guid scheme = (Guid)Marshal.PtrToStructure(p, typeof(Guid));
@@ -423,26 +423,26 @@ namespace GpuModeSwitch
                 Guid set = SettingOverlay;
 
                 rc = PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, index);
-                Logger.Line("PowerMode: PowerWriteACValueIndex " + index + " rc=" + rc + " (0 = OK)");
+                Log.Chan("POWER", "PowerMode: PowerWriteACValueIndex " + index + " rc=" + rc + " (0 = OK)");
                 if (rc != 0) return false;
 
                 rc = PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, index);
-                Logger.Line("PowerMode: PowerWriteDCValueIndex " + index + " rc=" + rc + " (0 = OK)");
+                Log.Chan("POWER", "PowerMode: PowerWriteDCValueIndex " + index + " rc=" + rc + " (0 = OK)");
                 if (rc != 0) return false;
 
                 rc = PowerSetActiveScheme(IntPtr.Zero, ref scheme);   // apply now
-                Logger.Line("PowerMode: PowerSetActiveScheme rc=" + rc + " (0 = OK)");
+                Log.Chan("POWER", "PowerMode: PowerSetActiveScheme rc=" + rc + " (0 = OK)");
 
                 uint acCheck = 0xFFFFFFFF, dcCheck = 0xFFFFFFFF;
                 PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, ref acCheck);
                 PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, ref dcCheck);
                 bool ok = acCheck == index && dcCheck == index;
-                Logger.Line("PowerMode: read-back AC=" + acCheck + " DC=" + dcCheck + (ok ? " (verified)" : " (MISMATCH)"));
+                Log.Chan("POWER", "PowerMode: read-back AC=" + acCheck + " DC=" + dcCheck + (ok ? " (verified)" : " (MISMATCH)"));
                 return ok;
             }
             catch (Exception ex)
             {
-                Logger.Line("PowerMode: overlay write failed - " + ex.Message);
+                Log.Chan("POWER", "PowerMode: overlay write failed - " + ex.Message);
                 return false;
             }
         }

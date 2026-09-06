@@ -124,9 +124,9 @@ namespace GpuModeSwitch
         private static void Main(string[] args)
         {
 #if MODE_ECO
-            Logger.Init("Eco Mode", "EcoMode");
+            Log.BeginSession("Eco Mode", Program.Version);
 #else
-            Logger.Init("Go Time", "GoTime");
+            Log.BeginSession("Go Time", Program.Version);
 #endif
 
             bool confirm = false;
@@ -151,12 +151,14 @@ namespace GpuModeSwitch
                 MessageBox.Show(AsusControl.DescribeState(), "Go Time - status",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
 #endif
+                Log.EndSession("status shown");
                 return;
             }
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm(confirm, auto));
+            Log.EndSession("main window closed");
         }
     }
 }

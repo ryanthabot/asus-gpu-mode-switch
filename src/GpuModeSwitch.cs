@@ -1,8 +1,22 @@
-//  GpuModeSwitch.cs  (v1.0.20)
+//  GpuModeSwitch.cs  (v1.0.21)
 //  --------------------------
 //  One source file, two executables (selected with a /define at build time):
 //    MODE_STANDARD  ->  "Go Time.exe"   : Standard GPU mode (MSHybrid, dGPU on)
 //    MODE_ECO       ->  "Eco Mode.exe"  : Eco GPU mode      (dGPU powered off)
+//
+//  v1.0.21 changes:
+//    - Game prep expanded (still 100% reversible via Eco Mode):
+//        Go Time: Game DVR background recording off (AppCaptureEnabled /
+//          GameDVR_Enabled), multimedia network throttling disabled
+//          (NetworkThrottlingIndex = 0xFFFFFFFF), plus six more services
+//          paused when present (WerSvc, MapsBroker, TrkWks, WMPNetworkSvc,
+//          SEMgrSvc, Fax).
+//        Eco Mode: all of it restored (captures on, throttling back to the
+//          Windows default of 10, services restarted).
+//    - Deliberately NOT touched: Xbox/Game Pass services (breaks store game
+//      logins), biometrics (login), text input / audio / display / themes
+//      services (breaks input, sound, visuals). The power plan itself also
+//      always stays Balanced.
 //
 //  v1.0.20 changes:
 //    - Energy Saver flow reordered to search-first: the "Always use energy
@@ -99,7 +113,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.0.20";
+        public const string Version = "1.0.21";
 
         [STAThread]
         private static void Main(string[] args)
@@ -932,7 +946,11 @@ namespace GpuModeSwitch
     // ---------------------------------------------------------------------
     internal static class GamePrep
     {
-        private static readonly string[] GamerServices = { "SysMain", "WSearch", "Spooler", "DiagTrack" };
+        private static readonly string[] GamerServices =
+        {
+            "SysMain", "WSearch", "Spooler", "DiagTrack",
+            "WerSvc", "MapsBroker", "TrkWks", "WMPNetworkSvc", "SEMgrSvc", "Fax"
+        };
 
         private static void SetHkcuDword(string subKey, string valueName, int value)
         {
@@ -951,11 +969,32 @@ namespace GpuModeSwitch
             }
         }
 
-        // Go Time: game mode on, toasts off, background services paused.
+        private static void SetHklmDword(string subKey, string valueName, uint value)
+        {
+            try
+            {
+                using (RegistryKey k = Registry.LocalMachine.OpenSubKey(subKey, true))
+                {
+                    if (k == null) { Logger.Line("GamePrep: HKLM write failed - " + subKey); return; }
+                    k.SetValue(valueName, value, RegistryValueKind.DWord);
+                    Logger.Line("GamePrep: HKLM " + valueName + " = " + value);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Line("GamePrep: HKLM write failed - " + ex.Message);
+            }
+        }
+
+        // Go Time: game mode on, toasts off, game captures off, network
+        // throttling off, background services paused.
         public static string ApplyForGaming()
         {
             SetHkcuDword(@"Software\Microsoft\GameBar", "AutoGameModeEnabled", 1);
             SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings", "NOC_GLOBAL_SETTING_TOASTS_ENABLED", 0);
+            SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\GameDVR", "AppCaptureEnabled", 0);
+            SetHkcuDword(@"System\GameConfigStore", "GameDVR_Enabled", 0);
+            SetHklmDword(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile", "NetworkThrottlingIndex", 0xFFFFFFFF);
 
             int paused = 0;
             foreach (string svc in GamerServices)
@@ -991,14 +1030,17 @@ namespace GpuModeSwitch
                     Logger.Line("GamePrep: " + svc + " stop failed - " + ex.Message);
                 }
             }
-            return "Game Mode on, do-not-disturb on, " + paused + "/" + GamerServices.Length +
-                   " background services paused.";
+            return "Game Mode on, do-not-disturb on, game captures off, network throttling off, " +
+                   paused + "/" + GamerServices.Length + " background services paused.";
         }
 
         // Eco Mode: bring everything back.
         public static string ApplyForEco()
         {
             SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings", "NOC_GLOBAL_SETTING_TOASTS_ENABLED", 1);
+            SetHkcuDword(@"Software\Microsoft\Windows\CurrentVersion\GameDVR", "AppCaptureEnabled", 1);
+            SetHkcuDword(@"System\GameConfigStore", "GameDVR_Enabled", 1);
+            SetHklmDword(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile", "NetworkThrottlingIndex", 10);   // Windows default
 
             int running = 0;
             foreach (string svc in GamerServices)
@@ -1034,7 +1076,8 @@ namespace GpuModeSwitch
                     Logger.Line("GamePrep: " + svc + " start failed - " + ex.Message);
                 }
             }
-            return "Toasts restored, " + running + "/" + GamerServices.Length + " background services running.";
+            return "Toasts restored, game captures on, network throttling default, " +
+                   running + "/" + GamerServices.Length + " background services running.";
         }
     }
 

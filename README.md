@@ -9,6 +9,14 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.0.21** — **deeper game prep, still fully reversible**: Go Time now
+> also turns off **Game DVR background recording**, disables **multimedia
+> network throttling** (restored to the Windows default by Eco Mode), and
+> pauses six more background services (**WerSvc, MapsBroker, TrkWks,
+> WMPNetworkSvc, SEMgrSvc, Fax**). Deliberately excluded: Xbox/Game Pass
+> services, biometrics, text input, audio and display services — anything
+> that would break logins, sound or the shell.
+>
 > **v1.0.20** — **Energy Saver flow reordered to search-first**: the
 > "Always use energy saver" toggle is looked for *before* any expansion
 > click, so an already expanded Energy saver card (persisted across runs by

@@ -8,9 +8,13 @@ D1–D9); this file adds what the handbook cannot say from inside the 18-agent
 build: what actually happened when a human used v1.1.0, what is broken, why,
 and exactly where the fixes go.
 
-- Repo: https://github.com/bigthabot/asus-gpu-mode-switch (mirror kept in sync
-  at https://github.com/ryanthabot/asus-gpu-mode-switch — same commits).
-- Release: `v1.1.0` tag, GitHub Release carries both exes.
+- Repo: https://github.com/bigthabot/asus-gpu-mode-switch (primary/publish —
+  at `5df43b7`, tag `v1.1.0`, at the time of writing).
+- Mirror: https://github.com/ryanthabot/asus-gpu-mode-switch — carries this
+  very handoff commit (`05862fb`, one commit ahead of bigthabot). This PC's
+  credentials (ryanthabot) cannot push to bigthabot (403). To sync bigthabot,
+  run once on a machine with bigthabot credentials:
+  `git pull https://github.com/ryanthabot/asus-gpu-mode-switch main && git push`
 - Test machine that produced the log: G513QR, no MUX (`0x00090016` reads bare
   zero = not implemented), ATKACPI transport works, NVIDIA dGPU.
 
@@ -303,8 +307,11 @@ Key reading of the log (all confirmed by code inspection):
 > before writing any code: read `docs/HANDBOOK.md` (hard constraints: C# 5
 > only, the Windows-shipped csc.exe compiler, no NuGet/SDK — see its §2) and
 > `docs/HANDOFF_v1.1.1.md` (the full current-state inventory, verified root
-> causes with file:line pointers, and the v1.1.1 scope). the repo and its
-> ryanthabot mirror are both at v1.1.0 (commit `5df43b7`).
+> causes with file:line pointers, and the v1.1.1 scope). the handoff doc
+> lives on the ryanthabot mirror at commit `05862fb` (one commit ahead of
+> the bigthabot repo above — pull it, or clone
+> https://github.com/ryanthabot/asus-gpu-mode-switch); both carry v1.1.0
+> code (commit `5df43b7`).
 >
 > "eco mode" correctly switches off the dgpu as well as engages windows'
 > energy saver toggle. i would like both apps to be able to switch that

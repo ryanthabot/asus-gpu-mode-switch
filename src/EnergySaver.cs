@@ -1,12 +1,16 @@
-//  EnergySaver.cs  (v1.0.22)
+//  EnergySaver.cs  (v1.1.1)
 //  -------------------------
-//  Windows Energy Saver + Power Mode overlay control: the legacy power API
-//  threshold, the EnergySaverState registry intent and the Settings
-//  UI-Automation toggle. Per-class comment below.
+//  Windows Energy Saver + Power Mode overlay control. v1.1.1 order (silent
+//  first): the documented SUB_ENERGYSAVER battery-charge threshold via the
+//  power API (works on every build tested incl. 26200 - see the note on the
+//  EsBattThreshold GUID), the EnergySaverState registry intent, and only as
+//  a fallback the Settings UI-Automation toggle - minimized, mouse-free and
+//  restricted to a window this process opened.
 //
 //  Split out of GpuModeSwitch.cs (Wave 2, zero behavior change).
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -33,7 +37,13 @@ namespace GpuModeSwitch
         private const string ValueName = "EnergySaverState";
 
         private static readonly Guid SubEnergySaver = new Guid("DE830923-A562-41AF-A086-E3A2C6BAD2DA"); // SUB_ENERGYSAVER
-        private static readonly Guid EsBattThreshold = new Guid("E69653CA-CF6F-4166-B25A-4D6A2C1B4E7F"); // ESBATTTHRESHOLD
+        // ESBATTTHRESHOLD, "Charge level" (0-100%). v1.1.1: the GUID used
+        // through v1.1.0 had a wrong tail and returned ERROR_FILE_NOT_FOUND
+        // on EVERY build - misread as "the API is gone on 24H2+". The tail
+        // below matches the setting defined under
+        // HKLM\...\PowerSettings\de830923-... on real installs (verified on
+        // build 26200: read + write + read-back all rc=0).
+        private static readonly Guid EsBattThreshold = new Guid("E69653CA-CF7F-4F05-AA73-CB833FA90AD4");
 
         // Windows 11 Power Mode overlay (the Settings "Power mode" slider).
         // Index 0 = Battery saver / best efficiency ... 3 = Best performance.
@@ -113,41 +123,23 @@ namespace GpuModeSwitch
             }
         }
 
-        // Full sync: the "Always use energy saver" switch in Settings is the
-        // primary control (persists, works on 24H2+/26200+); the legacy
-        // threshold is a fallback for older builds.
+        // Full sync, silent-first (v1.1.1): the documented charge-level
+        // threshold is the primary control (invisible, works on 24H2+/26200);
+        // the Settings automation only runs when that write fails, and it is
+        // minimized, mouse-free and never touches a pre-existing window.
         public static bool Sync(bool on)
         {
             WriteSavedState(on);
-            if (ToggleAlwaysUseEnergySaver(on)) return true;
-            Log.Chan("POWER", "EnergySaver: Settings automation failed - trying legacy threshold fallback");
-            return SetAutoThreshold(on ? 100u : 0u);
+            if (SetAutoThreshold(on ? 100u : 0u)) return true;
+            Log.Chan("POWER", "EnergySaver: silent threshold write failed - falling back to minimized Settings automation");
+            return ToggleAlwaysUseEnergySaver(on);
         }
 
         [DllImport("user32.dll")]
         private static extern IntPtr PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
         [DllImport("user32.dll")]
-        private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
-
-        private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
-        private const uint MOUSEEVENTF_MOVE = 0x0001;
-        private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
-        private const uint MOUSEEVENTF_LEFTUP = 0x0004;
-
-        private static AutomationElement FindSettingsWindow()
-        {
-            AutomationElement root = AutomationElement.RootElement;
-            Condition cond = new PropertyCondition(AutomationElement.ClassNameProperty, "ApplicationFrameWindow");
-            AutomationElementCollection wins = root.FindAll(TreeScope.Children, cond);
-            foreach (AutomationElement w in wins)
-            {
-                string nm = "";
-                try { nm = w.Current.Name; } catch {}
-                if (nm != null && nm.Contains("Settings")) return w;
-            }
-            return null;
-        }
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
         private static ToggleState GetToggleState(AutomationElement el)
         {
@@ -179,18 +171,51 @@ namespace GpuModeSwitch
             return null;
         }
 
-        private static void ClickCenter(System.Windows.Rect r)
+        // v1.1.1 window discipline for the fallback: never adopt a Settings
+        // window that existed before ours, and keep ours minimized.
+        private static List<IntPtr> SnapshotSettingsWindows()
         {
-            int cx = (int)(r.X + r.Width / 2);
-            int cy = (int)(r.Y + r.Height / 2);
-            int sw = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width;
-            int sh = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height;
-            uint ax = (uint)Math.Round(cx * 65535.0 / sw);
-            uint ay = (uint)Math.Round(cy * 65535.0 / sh);
-            Log.Chan("POWER", "EnergySaver: clicking " + cx + "," + cy);
-            mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, ax, ay, 0, UIntPtr.Zero);
-            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
-            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+            List<IntPtr> hwnds = new List<IntPtr>();
+            AutomationElementCollection wins = AutomationElement.RootElement.FindAll(
+                TreeScope.Children,
+                new PropertyCondition(AutomationElement.ClassNameProperty, "ApplicationFrameWindow"));
+            foreach (AutomationElement w in wins)
+            {
+                string nm = "";
+                try { nm = w.Current.Name; } catch {}
+                if (nm == null || !nm.Contains("Settings")) continue;
+                try { hwnds.Add((IntPtr)w.Current.NativeWindowHandle); } catch {}
+            }
+            return hwnds;
+        }
+
+        private static AutomationElement FindNewSettingsWindow(List<IntPtr> before)
+        {
+            AutomationElementCollection wins = AutomationElement.RootElement.FindAll(
+                TreeScope.Children,
+                new PropertyCondition(AutomationElement.ClassNameProperty, "ApplicationFrameWindow"));
+            foreach (AutomationElement w in wins)
+            {
+                string nm = "";
+                try { nm = w.Current.Name; } catch {}
+                if (nm == null || !nm.Contains("Settings")) continue;
+                IntPtr h = IntPtr.Zero;
+                try { h = (IntPtr)w.Current.NativeWindowHandle; } catch {}
+                if (before.Contains(h)) continue;   // the user's own window - never touch it
+                return w;
+            }
+            return null;
+        }
+
+        private static void MinimizeWindow(AutomationElement el)
+        {
+            try
+            {
+                IntPtr hwnd = (IntPtr)el.Current.NativeWindowHandle;
+                ShowWindow(hwnd, 6);   // SW_MINIMIZE - may flash in the taskbar, never covers the screen
+                Log.Chan("POWER", "EnergySaver: our Settings window minimized");
+            }
+            catch { }
         }
 
         // Presses the Energy saver card's own "Show more settings" button
@@ -236,7 +261,13 @@ namespace GpuModeSwitch
                 float cy = (float)(r.Y + r.Height / 2);
                 if (cy >= gRect.Y - 5 && cy <= gRect.Y + gRect.Height + 5)
                 {
-                    ClickCenter(r);
+                    object pat;
+                    if (!e.TryGetCurrentPattern(InvokePattern.Pattern, out pat))
+                    {
+                        Log.Chan("POWER", "EnergySaver: expand button has no Invoke pattern");
+                        return false;
+                    }
+                    ((InvokePattern)pat).Invoke();
                     return true;
                 }
             }
@@ -255,15 +286,24 @@ namespace GpuModeSwitch
             catch { }
         }
 
-        // Opens Settings > Power & battery, expands the Energy saver card and
-        // toggles "Always use energy saver" to the requested state via UI
-        // Automation. Works on 24H2+/26200+ where no power API exists.
+        // Fallback only (v1.1.1): opens Settings > Power & battery, expands
+        // the Energy saver card and toggles "Always use energy saver" via UI
+        // Automation. As invisible as the platform allows: our window is
+        // opened minimized and minimized again the moment it appears, no
+        // action ever moves the real mouse (Invoke/Toggle patterns only),
+        // and only a window this process launched is used - a pre-existing
+        // Settings window is never adopted or closed.
         public static bool ToggleAlwaysUseEnergySaver(bool on)
         {
-            Log.Chan("POWER", "EnergySaver: opening Settings > Power & battery > Energy saver");
+            List<IntPtr> preExisting = SnapshotSettingsWindows();
+            Log.Chan("POWER", "EnergySaver: opening Settings > Power & battery > Energy saver (minimized)");
             try
             {
-                Process.Start(new ProcessStartInfo("ms-settings:powersleep") { UseShellExecute = true });
+                Process.Start(new ProcessStartInfo("ms-settings:powersleep")
+                {
+                    UseShellExecute = true,
+                    WindowStyle = ProcessWindowStyle.Minimized   // honored or not; minimized again below
+                });
             }
             catch (Exception ex)
             {
@@ -275,15 +315,14 @@ namespace GpuModeSwitch
             for (int i = 0; i < 15 && settings == null; i++)
             {
                 Thread.Sleep(400);
-                settings = FindSettingsWindow();
+                settings = FindNewSettingsWindow(preExisting);
+                if (settings != null) MinimizeWindow(settings);
             }
             if (settings == null)
             {
-                Log.Chan("POWER", "EnergySaver: Settings window never appeared");
+                Log.Chan("POWER", "EnergySaver: no new Settings window appeared (existing ones left untouched)");
                 return false;
             }
-            Thread.Sleep(800);
-
             Thread.Sleep(800);
 
             // Search FIRST. If the toggle is already visible (the card stays
@@ -355,6 +394,13 @@ namespace GpuModeSwitch
             return ok;
         }
 
+        // ESBATTTHRESHOLD ("Charge level", 0-100%): the documented
+        // SUB_ENERGYSAVER setting that governs when Energy Saver engages.
+        // Eco writes 100 (always engage - the same "always on" the Settings
+        // toggle expresses); Go Time writes 0 (never auto-engage while
+        // gaming - stronger than the Settings toggle-off, which only returns
+        // to the charge-level default; Eco puts it back). Written to both AC
+        // and DC, applied immediately, verified by read-back.
         private static bool SetAutoThreshold(uint percent)
         {
             try
@@ -369,26 +415,25 @@ namespace GpuModeSwitch
                 Guid scheme = (Guid)Marshal.PtrToStructure(p, typeof(Guid));
                 Marshal.FreeCoTaskMem(p);
                 Log.Chan("POWER", "EnergySaver: active scheme " + scheme.ToString("B") +
-                            " - setting battery threshold to " + percent + "%");
+                            " - setting energy saver charge level to " + percent + "%");
 
                 Guid sub = SubEnergySaver;
                 Guid set = EsBattThreshold;
 
+                rc = PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, percent);
+                Log.Chan("POWER", "EnergySaver: PowerWriteACValueIndex rc=" + rc + " (0 = OK)");
+                if (rc != 0) Log.Chan("POWER", "EnergySaver: AC index refused - continuing with the battery (DC) index");
+
                 rc = PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, percent);
                 Log.Chan("POWER", "EnergySaver: PowerWriteDCValueIndex rc=" + rc + " (0 = OK)");
-                if (rc == 2)
-                {
-                    Log.Chan("POWER", "EnergySaver: rc=2 (ERROR_FILE_NOT_FOUND) - this Windows build does not " +
-                                "expose the Energy Saver threshold via the legacy power API " +
-                                "(ES moved to the whesvc service on 24H2+/26200+).");
-                }
                 if (rc != 0) return false;
 
-                uint readBack = 0xFFFFFFFF;
-                rc = PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, ref readBack);
-                Log.Chan("POWER", "EnergySaver: PowerReadDCValueIndex rc=" + rc + " value=" + readBack +
-                            (rc == 0 && readBack == percent ? " (verified)" : " (MISMATCH)"));
-                if (rc != 0 || readBack != percent) return false;
+                uint acRead = 0xFFFFFFFF, dcRead = 0xFFFFFFFF;
+                PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, ref acRead);
+                PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref set, ref dcRead);
+                Log.Chan("POWER", "EnergySaver: read-back AC=" + acRead + " DC=" + dcRead +
+                            (dcRead == percent ? " (verified)" : " (MISMATCH)"));
+                if (dcRead != percent) return false;
 
                 rc = PowerSetActiveScheme(IntPtr.Zero, ref scheme);   // apply now
                 Log.Chan("POWER", "EnergySaver: PowerSetActiveScheme rc=" + rc + " (0 = OK)");

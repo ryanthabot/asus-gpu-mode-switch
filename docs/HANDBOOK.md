@@ -1144,6 +1144,25 @@ commit hash); mark blocked with the reason. Add new rows at the bottom.
     restore)` (`7841c88`) + a docs commit on `v1.1-logging-cleanup`. Not
     pushed (never push).
 
+- **2026-09-07 — Post-release verification (owner's machine, first real
+  v1.1.0 run).** The v1.1.0 Go Time session log (complete copy in
+  `docs/HANDOFF_v1.1.1.md` §5) confirmed the analyzer, D7 gates, logging
+  rewrite, monitor engine and eco-safe restore all work — and exposed the
+  release blocker: the selection stage renders EMPTY because `_selectPanel`
+  is created hidden (`src\Forms.cs:1142`) and `EnterSelect`
+  (`src\Forms.cs:1624`) never sets it visible (the only `Visible = true` is
+  in `EnterResultTraySection`, `src\Forms.cs:1422`, which runs post-switch).
+  GO was never pressed, so the GPU switch, optimizations, cleanup, tray and
+  overlay never ran — a cascade of one bug, not six. Second finding: Energy
+  Saver sync pops a visible Settings window and moves the real mouse
+  (`src\EnergySaver.cs:119` / `:266` / `:182-194`); the silent legacy
+  threshold fallback is dead on Windows 24H2+/26200 (rc=2, ES moved to the
+  whesvc service — documented in-code at `src\EnergySaver.cs:379-384`).
+  Full current-state inventory, root causes, fix pointers and the v1.1.1
+  scope (selection-stage fix, invisible Energy Saver, CHANGELOG.md +
+  portability file, release discipline): **`docs/HANDOFF_v1.1.1.md`**;
+  §8 below carries the known-issues block.
+
 ---
 
 ## §7 Build & verify (exact commands)
@@ -1177,6 +1196,27 @@ reference — fix the code, never change the compiler or add references outside
 ---
 
 ## §8 Next steps — PROJECT COMPLETE
+
+### Post-release known issues (v1.1.1 — OPEN)
+
+Found in the first real-world v1.1.0 run (2026-09-07); full analysis,
+verified file:line root causes and the v1.1.1 scope live in
+**`docs/HANDOFF_v1.1.1.md`** — read it before continuing any work:
+
+1. **Go Time selection stage invisible** — `_selectPanel` is created hidden
+   (`Forms.cs:1142`); `EnterSelect` (`Forms.cs:1624`) never shows it; the
+   only `Visible = true` is `EnterResultTraySection` (`Forms.cs:1422`), which
+   runs after the switch. With nothing to select, GO was never pressed → no
+   GPU cycle, optimizations, cleanup, session tray or overlay (all cascade).
+2. **Energy Saver switching is visible/obtrusive** — a Settings window pops
+   up and the real mouse moves (`EnergySaver.cs:119`/`:266`/`:182-194`);
+   the silent legacy fallback fails on 24H2+/26200 (rc=2, whesvc). Owner
+   requirement: both apps switch Energy Saver invisibly.
+3. **Docs/process gaps for v1.1.1+** — no `CHANGELOG.md` yet; a portability
+   file is wanted; release discipline: a new version per repaired error AND
+   per added feature, full GitHub release history.
+
+Everything below was written at v1.1.0 release time and is kept for history.
 
 1. **Waves 1–5 — DONE** (see §5/§6): bootstrap, decomposition, logging core
    (`Log` contract in §3 — all modules log through `Log.Info` / `Log.Warn` /

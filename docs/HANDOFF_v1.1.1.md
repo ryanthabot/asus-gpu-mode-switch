@@ -179,6 +179,12 @@ fails at runtime with a known root cause.
    Bump `Program.Version` at `src/App.cs:148`.
 6. **HANDBOOK stays living** — append to §4/§6, update §5; never rewrite
    history sections (per its own header rules).
+7. **SINGLE APP (owner decision, 2026-09-07)** — the owner wants ONE
+   executable with both modes inside it, not two separate exes. This
+   supersedes handbook decision D4 ("the suite stays two exes") — recorded
+   as D10 in HANDBOOK §4. Scope it as **v1.2.0** (it is a feature; per the
+   owner's own release discipline a feature gets its own version AFTER the
+   v1.1.1 error fixes). Full design sketch in §7 below.
 
 ## §5 The complete v1.1.0 Go Time session log (the owner's report)
 
@@ -299,7 +305,54 @@ Key reading of the log (all confirmed by code inspection):
   existing history. Publish to `bigthabot` (and the `ryanthabot` mirror when
   credentials allow). GitHub Release per version with both exes attached.
 
-## §7 The complete updated owner prompt (copy-paste ready)
+## §7 Single-app design sketch (owner requirement, 2026-09-07 — target v1.2.0)
+
+The owner wants one executable, not two. What changes and what doesn't:
+
+**The new shape**
+- One exe — proposed name `GPU Mode Switch.exe` (matches the repo; confirm
+  the name/icon preference with the owner before building the release).
+  `build.cmd` drops to a single csc invocation; the `MODE_STANDARD` /
+  `MODE_ECO` defines and every `#if` region go away — both paths compile in
+  and the mode is chosen at RUNTIME.
+- Launch → probe → a new **home screen** (new `UiPhase.Home` before
+  Confirm/Select): current GPU state (dGPU on/off, Energy Saver state) plus
+  two big actions — **Go Time (Standard)** and **Eco Mode**. The action for
+  the mode you are already in shows as active/disabled with an "already in
+  this mode" note (it can still be pressed to re-sync Energy Saver/Power
+  Mode and, for eco, run the restore).
+- Go Time action → the existing selection stage (once the §2.1 fix lands)
+  → GO → switch + session features. Behavior unchanged.
+- Eco action → the existing one-click flow (review stage with `--confirm`)
+  → switch + `SessionSafety.RestoreAll`. Behavior unchanged.
+- Session tray "Restore (Eco Mode)" becomes first-class in v1.2.0: today it
+  only undoes session state and leaves the GPU switch to the other exe (per
+  old D4); in the single app it can run the full eco switch in-process.
+- CLI: `--gotime` / `--eco` preselect the mode (skipping the home screen);
+  `--auto` keeps its Go-Time-only meaning, `--confirm` and `--status`
+  unchanged. A desktop shortcut with `--eco` reproduces today's one-click
+  Eco Mode experience.
+- Logging: `Log.BeginSession` already names the folder from the app name —
+  pass the RUN's mode ("Go Time"/"Eco Mode") so the existing
+  `logs\GoTime|EcoMode` split and the Log History browser keep working
+  unchanged.
+
+**What barely changes** — `AsusControl`, `EnergySaver`, `GamePrep`, all
+cleaners/freezer/plans/monitor/overlay/profiles/history modules are
+mode-agnostic already. The real work is `App.cs` (identity by define →
+runtime mode), `Forms.cs` (home phase + un-`#if` the two flows), `build.cmd`
+(one invocation, one icon set, both 256px PNGs embedded if per-mode artwork
+is kept in the UI), and the release process (one exe attached).
+
+**Versioning** — v1.1.1 first (selection-stage fix + invisible Energy
+Saver + CHANGELOG/portability discipline), verified via the BUILD_NOTES
+checklist; THEN v1.2.0 (this merge) as its own release. Doing the fix
+first matters: the fix is one line in the current structure and
+independently verifiable; the merge then restructures around known-good
+code. If the owner prefers one combined release, fold this into v1.1.1 —
+the decision belongs to the owner, not the agent.
+
+## §8 The complete updated owner prompt (copy-paste ready)
 
 > i am currently working on a project found at this github address
 > https://github.com/bigthabot/asus-gpu-mode-switch/releases/tag/v1.1.0
@@ -355,6 +408,19 @@ Key reading of the log (all confirmed by code inspection):
 > edited from different pc's. continue keeping a full release history on
 > github adding a new version everytime a new error is repaired and a new
 > feature is added.
+>
+> also: i wanted this to be a single app, not 2 individual apps. today the
+> project ships two executables (Go Time.exe and Eco Mode.exe) built from
+> one shared codebase with two compiler defines. starting with the release
+> AFTER the v1.1.1 fixes (call it v1.2.0), merge them into ONE executable
+> with both modes inside: launch shows the current gpu state and two
+> actions (Go Time / Eco Mode); each action keeps its existing behavior
+> (selection stage + GO for go time, one-click or --confirm for eco); the
+> session tray's "Restore (Eco Mode)" runs the full eco switch in-process;
+> the cli gains --gotime / --eco; build.cmd becomes a single compile with
+> no MODE_STANDARD/MODE_ECO defines. the full design sketch is
+> docs/HANDOFF_v1.1.1.md §7 — follow it, and confirm the final app name
+> and icon with me before building that release.
 >
 > there is a known issue that has already been found. check documents and any
 > associated places that that information may be documented. research known

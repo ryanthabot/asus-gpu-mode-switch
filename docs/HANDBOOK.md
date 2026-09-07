@@ -105,6 +105,8 @@ profiles, session history and the live monitor (see §5). The suite stays
    `MODE_ECO` → `dist\Eco Mode.exe`. Any code meant for only one app must be
    wrapped in `#if MODE_STANDARD` / `#if MODE_ECO` (see `TrayApps`, the
    selection stage, and the per-app constants in `MainForm`).
+   **[SUPERSEDED by D10 (§4) as of the v1.2.0 single-app merge — until that
+   release lands, this constraint still applies.]**
 7. **Never push to remote.** Git identity is already configured globally
    (bigthabot) — do not set or change git config.
 8. **Don't modify source files outside your wave's scope.** Wave 1 touched no
@@ -356,6 +358,18 @@ the Wave 6 UI visibility without enabling the dangerous action).
 **AppCacheCleaner (A9)** owns browser/app caches (cache-only per D5),
 **GpuTools (A11)** owns GPU shader caches and driver leftovers, and
 **ComponentStore (A8)** owns the DISM component store (Tier 2).
+
+**D10 (2026-09-07, owner decision) — ONE executable, both modes inside.
+SUPERSEDES D4.** The owner wants a single app, not the two-exe suite D4
+mandated. Target release: v1.2.0 (after the v1.1.1 error fixes; per the
+owner's release discipline a feature gets its own version). Shape: one
+runtime mode selection replaces the `MODE_STANDARD`/`MODE_ECO` compile-time
+defines (HANDBOOK §2.6 is superseded from that release on); a home screen
+offers Go Time / Eco Mode with current GPU state; each path keeps its
+existing behavior (selection stage + GO vs one-click/--confirm + eco-safe
+restore); the session tray's Restore becomes a full in-process eco switch;
+CLI gains `--gotime`/`--eco`; `build.cmd` compiles once. Full design sketch:
+`docs/HANDOFF_v1.1.1.md` §7.
 
 ---
 
@@ -1215,6 +1229,9 @@ verified file:line root causes and the v1.1.1 scope live in
 3. **Docs/process gaps for v1.1.1+** — no `CHANGELOG.md` yet; a portability
    file is wanted; release discipline: a new version per repaired error AND
    per added feature, full GitHub release history.
+4. **Owner requirement change (2026-09-07): single app** — one executable
+   with both modes, superseding D4. Scoped as v1.2.0; see D10 (§4) and the
+   design sketch in `docs/HANDOFF_v1.1.1.md` §7.
 
 Everything below was written at v1.1.0 release time and is kept for history.
 

@@ -1636,6 +1636,7 @@ namespace GpuModeSwitch
             _status.Text = "Ready - choose optimizations, then press GO";
             LayoutSelectContent(precheckText);
             SetSelectGroupsVisible(true);
+            _selectPanel.Visible = true;   // v1.1.1: created hidden in the ctor and never shown here - the whole stage was invisible, so GO was unreachable
             EnsureMonitorEngine();
             _monitorPanel.AttachToEngine();
             StartMeasureOnce();

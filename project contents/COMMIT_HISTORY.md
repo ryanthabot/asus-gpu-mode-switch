@@ -606,3 +606,166 @@ CommitDate: Sun Sep 6 17:59:58 2026 -0400
  README.md        | 119 ++++++++++++++++++++++-
  docs/HANDBOOK.md | 291 ++++++++++++++++++++++++++++++++++++-------------------
  3 files changed, 462 insertions(+), 102 deletions(-)
+
+------------------------------------------------------------------------
+
+# v1.1.1 commits (post-release handoff + fix release, 2026-09-07)
+
+Generated from `git log cdb52f2..0ac721b` (v1.1.0 release -> v1.1.1 release),
+authored on the ryanthabot mirror with the same commit discipline.
+
+commit 5df43b757efdd3acb24f30aec0dd17382e109f73
+Author: bigthabot <325692204+bigthabot@users.noreply.github.com>
+Date:   2026-09-07 16:27:49 -0400
+
+    docs(project-contents): add self-contained review bundle for off-repo viewing
+    
+    What changed (file by file):
+    - project contents/CONTENTS.md (new): index of the bundle — what each
+      file is, where the living copies sit in the repo, publish state
+      (branch/main/tag/release), and the known v1.1.0 issue (Go Time
+      selection stage can render empty; fix planned as v1.1.1).
+    - project contents/HANDBOOK.md (new): snapshot of docs/HANDBOOK.md at
+      the v1.1.0 release — the full handoff document (constraints, module
+      API map, decisions D1-D9, checklist, wave progress log with
+      verification evidence, build/verify commands).
+    - project contents/README.md, BUILD_NOTES.md, LICENSE (new): snapshots
+      of the root docs so the bundle is self-contained.
+    - project contents/COMMIT_HISTORY.md (new, generated): full commit
+      details of the v1.1.0 build — git log 4260aef..cdb52f2 with full
+      messages and per-commit file stats, chronological order.
+    
+    Why: repo owner asked for the entire project (docs, commit details,
+    handoff document, handbook, markdown files) to be published in a
+    'project contents' folder so the project can be viewed in its entirety
+    elsewhere. Snapshots are taken at v1.1.0 (cdb52f2); the living copies
+    under docs/ remain the canonical versions for future waves.
+    
+    Verification: folder contents listed (6 files); COMMIT_HISTORY.md is
+    608 lines covering all 7 build commits; no source files touched;
+    working tree clean after commit.
+    
+    Next: push v1.1-logging-cleanup, fast-forward main, tag v1.1.0, create
+    the GitHub release with the two built executables attached.
+
+ project contents/BUILD_NOTES.md    |  259 ++++++++
+ project contents/COMMIT_HISTORY.md |  608 ++++++++++++++++++
+ project contents/CONTENTS.md       |   39 ++
+ project contents/HANDBOOK.md       | 1227 ++++++++++++++++++++++++++++++++++++
+ project contents/LICENSE           |   21 +
+ project contents/README.md         |  365 +++++++++++
+ 6 files changed, 2519 insertions(+)
+
+commit 05862fb6edd19b312a3fc0644f0bf393d352b35d
+Author: ryanthabot <258673122+ryanthabot@users.noreply.github.com>
+Date:   2026-09-07 19:00:12 -0400
+
+    docs(handoff): v1.1.1 handoff — verified post-release root causes, current-state inventory, owner prompt
+    
+    - docs/HANDOFF_v1.1.1.md: behavior inventory (runtime-verified vs
+      build-verified vs broken), root causes with file:line pointers for the
+      invisible Go Time selection stage (Forms.cs:1142/1624/1422) and the
+      obtrusive Energy Saver Settings automation (EnergySaver.cs:119/266/
+      182-194, silent fallback dead on 24H2+/26200 per lines 379-384),
+      known non-issues explained from the v1.1.0 log, v1.1.1 scope
+      (fix + invisible ES + CHANGELOG.md + portability file + release
+      discipline), the complete v1.1.0 session log, and the updated
+      copy-paste owner prompt.
+    - HANDBOOK: append-only §6 post-release entry + §8 post-release
+      known-issues block (resolves the dangling CONTENTS.md pointer).
+
+ docs/HANDBOOK.md       |  40 ++++++
+ docs/HANDOFF_v1.1.1.md | 359 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 399 insertions(+)
+
+commit e0042b94b8c727c3cd4cb92d8422655385c7e2cc
+Author: ryanthabot <258673122+ryanthabot@users.noreply.github.com>
+Date:   2026-09-07 19:01:04 -0400
+
+    docs(handoff): note exact repo sync state (ryanthabot ahead by the handoff commits; how to sync bigthabot)
+
+ docs/HANDOFF_v1.1.1.md | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+commit fd3e655056d8ab48edded4ed58096396b8ba4b93
+Author: ryanthabot <258673122+ryanthabot@users.noreply.github.com>
+Date:   2026-09-07 19:04:54 -0400
+
+    docs(requirement): owner wants a single app (both modes in one exe) — D10 supersedes D4
+    
+    - HANDOFF_v1.1.1.md: new §7 merge design sketch (home screen, runtime mode
+      selection, --gotime/--eco, single compile, tray restore goes in-process,
+      what barely changes), scope note (v1.2.0 after the v1.1.1 fixes), §4 item
+      7, and the requirement added to the embedded owner prompt.
+    - HANDBOOK: D10 appended (append-only), §2.6 annotated as superseded from
+      v1.2.0, §8 known-issues block gains the requirement.
+
+ docs/HANDBOOK.md       | 17 +++++++++++++
+ docs/HANDOFF_v1.1.1.md | 68 +++++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 84 insertions(+), 1 deletion(-)
+
+commit e46618eccbc922721fc7af931e65578a653d31e8
+Author: ryanthabot <258673122+ryanthabot@users.noreply.github.com>
+Date:   2026-09-07 19:26:57 -0400
+
+    fix(select): show the selection stage panel so GO is reachable
+    
+    The panel hosting every option group was created hidden (Forms.cs ctor)
+    and EnterSelect never set it visible - only EnterResultTraySection
+    (post-switch) did. With nothing to select, GO was never pressed in the
+    v1.1.0 field run, so the dGPU switch, optimizations, cleanup, session
+    tray and overlay never executed: one missing line, five symptoms
+    (docs/HANDOFF_v1.1.1.md 2.1).
+
+ src/Forms.cs | 1 +
+ 1 file changed, 1 insertion(+)
+
+commit 9c0f0cf94d7a7af5b0d1f2c68509f98bfa3fdbeb
+Author: ryanthabot <258673122+ryanthabot@users.noreply.github.com>
+Date:   2026-09-07 19:26:57 -0400
+
+    fix(energy-saver): silent-first switching; corrected ESBATTTHRESHOLD GUID works on 26200
+    
+    The 'threshold API removed on 24H2+/26200 (moved to whesvc)' belief was
+    wrong: whesvc is Windows Health and Optimized Experiences (unrelated),
+    and PowerRead/WriteValueIndex had been failing with rc=2 on every build
+    because the ESBATTTHRESHOLD GUID had a hallucinated tail. Correct GUID
+    e69653ca-cf7f-4f05-aa73-cb833fa90ad4 (Charge level, 0-100%) verified on
+    build 26200: read rc=0 (DC=30), no-op write rc=0, read-back verified.
+    
+    - Sync is now silent-first: threshold write (AC+DC, read-back verified,
+      applied immediately); Settings automation only on failure.
+    - Eco writes 100% (energy saver always), Go Time 0% (never auto-engages
+      while gaming - intentionally stronger than the Settings toggle-off).
+    - Settings fallback reworked: mouse_event removed entirely (expand via
+      UIA InvokePattern, toggle via TogglePattern), pre-existing Settings
+      windows are snapshotted and never adopted or closed, our window is
+      opened and kept minimized.
+    - Program.Version 1.1.1.
+
+ src/App.cs         |   2 +-
+ src/EnergySaver.cs | 173 +++++++++++++++++++++++++++++++++--------------------
+ 2 files changed, 110 insertions(+), 65 deletions(-)
+
+commit 0ac721b221e82aa559b0205fd9224a969e8c7205
+Author: ryanthabot <258673122+ryanthabot@users.noreply.github.com>
+Date:   2026-09-07 19:26:57 -0400
+
+    docs(release): v1.1.1 - CHANGELOG.md, PORTABILITY.md, README/HANDBOOK/HANDOFF updates
+    
+    - CHANGELOG.md: the running human-readable history of both apps (full
+      v1.0.1 -> v1.1.1) with the release-process rule that appends every
+      version.
+    - PORTABILITY.md: clone/build/per-user state/publish, and the
+      bigthabot-primary + ryanthabot-mirror remote layout with the sync
+      command.
+    - README: v1.1.1 entry. HANDBOOK: v1.1.1 section-6 entry, section-8
+      items 1-3 marked fixed. HANDOFF: v1.1.1 outcome banner (including the
+      superseded whesvc premise).
+
+ CHANGELOG.md           | 117 +++++++++++++++++++++++++++++++++++++++++++++++++
+ PORTABILITY.md         |  68 ++++++++++++++++++++++++++++
+ README.md              |  16 +++++++
+ docs/HANDBOOK.md       |  44 ++++++++++++++++++-
+ docs/HANDOFF_v1.1.1.md |  10 +++++
+ 5 files changed, 254 insertions(+), 1 deletion(-)

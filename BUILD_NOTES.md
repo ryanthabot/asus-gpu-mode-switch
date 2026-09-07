@@ -257,3 +257,80 @@ and must be done interactively by a human:
 10. [ ] Log browser: search a term across all logs; click a hit → opens
        that file at the line; Open folder selects the file in Explorer.
        Filter + find-next + Copy log / Copy all inside View log.
+
+---
+
+# v1.1.1 verification (fix release — built and verified 2026-09-07)
+
+Machine: dev PC, Windows build 26200 (same build family as the target
+G513QR but NOT ASUS hardware) — build, static and probe verification only;
+the interactive paths remain manual checklist items (11–13 added below).
+
+## Scope (commits e46618e / 9c0f0cf / 0ac721b)
+
+- `fix(select)` — the selection-stage panel is made visible in `EnterSelect`
+  (Forms.cs); created hidden in the ctor, it was never shown, so GO was
+  unreachable and every GO-gated feature was dead.
+- `fix(energy-saver)` — silent-first `Sync`: corrected ESBATTTHRESHOLD GUID,
+  AC+DC threshold write with read-back verification, and the Settings UIA
+  fallback reworked (no `mouse_event`, own minimized window only).
+- `docs(release)` — CHANGELOG.md, PORTABILITY.md, README/HANDBOOK/HANDOFF.
+
+## Integrated build (both targets, zero diagnostics)
+
+`cmd /c "src\build.cmd"` from the repo root, run twice during the fix
+(after each code change) — csc is the Windows-shipped
+`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`
+(4.8.9221.0 for C# 5), silent on success, exit 0, `Build OK:` + both exes.
+
+| Artifact | v1.1.0 | v1.1.1 |
+|---|---|---|
+| `dist\Go Time.exe` | 292,864 | **293,376** |
+| `dist\Eco Mode.exe` | 265,216 | **265,216** (net IL change absorbed by section alignment — the mouse_event removal offsets the additions; content verified by the string scan below) |
+
+## Static checks
+
+- Banned C# 6 syntax scan over the three changed files (`$"`, `?.`,
+  `nameof(`, `=>`, `??=`, `using static`): **0 hits**.
+- Repo-wide search for removed members (`ClickCenter`, `mouse_event`,
+  `FindSettingsWindow`): no dangling references.
+- UTF-16 string scan of BOTH built exes: the new Energy Saver log strings
+  ("no new Settings window appeared", "read-back AC=") and the version
+  string "1.1.1" are present in Go Time.exe AND Eco Mode.exe — the fix is
+  compiled into both targets.
+
+## Energy Saver silent path — probe evidence (load-bearing verification)
+
+Out-of-tree harness (temp dir + framework csc, deleted afterwards), run on
+AC power and STRICTLY no-op (the harness wrote back the identical value it
+read; this machine's charge level remains 30%):
+
+```
+PowerGetActiveScheme rc=0  scheme={1a993c44-...}
+OLD code GUID E69653CA-CF6F-4166-B25A-4D6A2C1B4E7F  DC read rc=2  (ERROR_FILE_NOT_FOUND)
+REGISTRY GUID  E69653CA-CF7F-4F05-AA73-CB833FA90AD4  DC read rc=0  value=30
+REGISTRY GUID                                     AC read rc=0  value=0
+REGISTRY GUID write-back(same value)              DC write rc=0
+verify DC=30 (unchanged - no-op verified)
+```
+
+Corroboration: `sc qc whesvc` → "Windows Health and Optimized Experiences"
+(unrelated to Energy Saver — the v1.1.0 "ES moved to whesvc" note was
+wrong); `powercfg /aliases` exposes no energy-related alias on this build
+and the subgroup is queryable only through the PowerSettings registry hive.
+Conclusion: the silent-first `Sync` order is backed by direct evidence on
+build 26200; the UIA fallback keeps its own read-back verification.
+
+## MANUAL VERIFICATION CHECKLIST — v1.1.1 additions (UAC-gated, owner, on the G513QR)
+
+11. [ ] Go Time selection stage SHOWS every group at launch (profile bar,
+       optimizations, tray apps, performance, cleanup with measured sizes,
+       monitor) — the v1.1.0 empty window is gone.
+12. [ ] Eco Mode run: NO Settings window appears at any point; the log's
+       POWER channel shows the silent path (charge level 100%, write
+       rc=0, read-back verified) and Windows reports Energy Saver on.
+13. [ ] Go Time GO run: the same silent POWER lines at 0%; Energy Saver
+       reports off afterwards.
+
+(Items 1–10 above still apply; 2, 5, 6 and 7 are exactly the paths the
+v1.1.1 fixes unblock.)

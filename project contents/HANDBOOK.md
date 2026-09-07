@@ -105,6 +105,8 @@ profiles, session history and the live monitor (see §5). The suite stays
    `MODE_ECO` → `dist\Eco Mode.exe`. Any code meant for only one app must be
    wrapped in `#if MODE_STANDARD` / `#if MODE_ECO` (see `TrayApps`, the
    selection stage, and the per-app constants in `MainForm`).
+   **[SUPERSEDED by D10 (§4) as of the v1.2.0 single-app merge — until that
+   release lands, this constraint still applies.]**
 7. **Never push to remote.** Git identity is already configured globally
    (bigthabot) — do not set or change git config.
 8. **Don't modify source files outside your wave's scope.** Wave 1 touched no
@@ -356,6 +358,18 @@ the Wave 6 UI visibility without enabling the dangerous action).
 **AppCacheCleaner (A9)** owns browser/app caches (cache-only per D5),
 **GpuTools (A11)** owns GPU shader caches and driver leftovers, and
 **ComponentStore (A8)** owns the DISM component store (Tier 2).
+
+**D10 (2026-09-07, owner decision) — ONE executable, both modes inside.
+SUPERSEDES D4.** The owner wants a single app, not the two-exe suite D4
+mandated. Target release: v1.2.0 (after the v1.1.1 error fixes; per the
+owner's release discipline a feature gets its own version). Shape: one
+runtime mode selection replaces the `MODE_STANDARD`/`MODE_ECO` compile-time
+defines (HANDBOOK §2.6 is superseded from that release on); a home screen
+offers Go Time / Eco Mode with current GPU state; each path keeps its
+existing behavior (selection stage + GO vs one-click/--confirm + eco-safe
+restore); the session tray's Restore becomes a full in-process eco switch;
+CLI gains `--gotime`/`--eco`; `build.cmd` compiles once. Full design sketch:
+`docs/HANDOFF_v1.1.1.md` §7.
 
 ---
 
@@ -1144,6 +1158,61 @@ commit hash); mark blocked with the reason. Add new rows at the bottom.
     restore)` (`7841c88`) + a docs commit on `v1.1-logging-cleanup`. Not
     pushed (never push).
 
+- **2026-09-07 — Post-release verification (owner's machine, first real
+  v1.1.0 run).** The v1.1.0 Go Time session log (complete copy in
+  `docs/HANDOFF_v1.1.1.md` §5) confirmed the analyzer, D7 gates, logging
+  rewrite, monitor engine and eco-safe restore all work — and exposed the
+  release blocker: the selection stage renders EMPTY because `_selectPanel`
+  is created hidden (`src\Forms.cs:1142`) and `EnterSelect`
+  (`src\Forms.cs:1624`) never sets it visible (the only `Visible = true` is
+  in `EnterResultTraySection`, `src\Forms.cs:1422`, which runs post-switch).
+  GO was never pressed, so the GPU switch, optimizations, cleanup, tray and
+  overlay never ran — a cascade of one bug, not six. Second finding: Energy
+  Saver sync pops a visible Settings window and moves the real mouse
+  (`src\EnergySaver.cs:119` / `:266` / `:182-194`); the silent legacy
+  threshold fallback is dead on Windows 24H2+/26200 (rc=2, ES moved to the
+  whesvc service — documented in-code at `src\EnergySaver.cs:379-384`).
+  Full current-state inventory, root causes, fix pointers and the v1.1.1
+  scope (selection-stage fix, invisible Energy Saver, CHANGELOG.md +
+  portability file, release discipline): **`docs/HANDOFF_v1.1.1.md`**;
+  §8 below carries the known-issues block.
+
+- **2026-09-07 — v1.1.1 (fix release) implemented.** Scope from
+  `docs/HANDOFF_v1.1.1.md`, executed per the owner's prompt:
+  - **Selection stage fixed** — `EnterSelect` (Forms.cs) now sets
+    `_selectPanel.Visible = true` after `SetSelectGroupsVisible(true)`.
+    The panel had been created hidden in the ctor and never shown, making
+    GO unreachable and every GO-gated feature dead (§8 item 1 resolved).
+  - **Energy Saver silent-first — root cause superseded the handoff's
+    premise.** The "threshold API removed on 24H2+/26200 (moved to
+    whesvc)" belief was WRONG on both counts: whesvc is "Windows Health
+    and Optimized Experiences" (unrelated), and the real failure was a
+    hallucinated GUID tail — the code used
+    `E69653CA-CF6F-4166-B25A-4D6A2C1B4E7F` while the OS defines
+    `e69653ca-cf7f-4f05-aa73-cb833fa90ad4` ("Charge level", 0-100%, under
+    `HKLM\...\PowerSettings\de830923-...`). Probe on build 26200 (on AC, no
+    behavior change): old GUID read rc=2; correct GUID read rc=0 (DC=30),
+    write rc=0, read-back verified. Fixes: GUID corrected;
+    `SetAutoThreshold` writes AC+DC with read-back verification; `Sync` is
+    silent-first with the Settings automation as fallback only. The UIA
+    fallback was also reworked: `mouse_event` removed entirely (expand
+    button via InvokePattern), pre-existing Settings windows are snapshotted
+    and never adopted/closed, our window is opened and kept minimized
+    (§8 item 2 resolved).
+  - Semantics note: Go Time writes 0% (ES never auto-engages while gaming —
+    intentionally stronger than the Settings toggle-off); Eco writes 100%
+    (always). Every step logged with raw rc.
+  - `Program.Version` → 1.1.1; `CHANGELOG.md` + `PORTABILITY.md` created
+    (owner's changelog/portability requirement, §8 item 3 resolved);
+    README gained the v1.1.1 entry.
+  - Build verified in-repo: both `/define` targets zero csc diagnostics;
+    banned-syntax scan (`$"`, `?.`, `nameof(`, `=>`, `??=`, `using static`)
+    zero hits on the changed files. The manual UAC-gated checklist
+    (BUILD_NOTES.md) remains owner verification — items 2, 5, 6, 7 exercise
+    exactly the two fixed paths.
+  - v1.2.0 (single-app merge, D10) intentionally NOT started — the owner
+    wants the final app name/icon confirmed first.
+
 ---
 
 ## §7 Build & verify (exact commands)
@@ -1177,6 +1246,36 @@ reference — fix the code, never change the compiler or add references outside
 ---
 
 ## §8 Next steps — PROJECT COMPLETE
+
+### Post-release known issues (items 1–3 FIXED in v1.1.1; item 4 = v1.2.0, pending)
+
+Found in the first real-world v1.1.0 run (2026-09-07); full analysis,
+verified file:line root causes and the v1.1.1 scope live in
+**`docs/HANDOFF_v1.1.1.md`** — read it before continuing any work:
+
+1. **Go Time selection stage invisible** — `_selectPanel` is created hidden
+   (`Forms.cs:1142`); `EnterSelect` (`Forms.cs:1624`) never shows it; the
+   only `Visible = true` is `EnterResultTraySection` (`Forms.cs:1422`), which
+   runs after the switch. With nothing to select, GO was never pressed → no
+   GPU cycle, optimizations, cleanup, session tray or overlay (all cascade).
+2. **Energy Saver switching is visible/obtrusive** — a Settings window pops
+   up and the real mouse moves (`EnergySaver.cs:119`/`:266`/`:182-194`);
+   the silent legacy fallback fails on 24H2+/26200 (rc=2, whesvc). Owner
+   requirement: both apps switch Energy Saver invisibly.
+3. **Docs/process gaps for v1.1.1+** — no `CHANGELOG.md` yet; a portability
+   file is wanted; release discipline: a new version per repaired error AND
+   per added feature, full GitHub release history.
+4. **Owner requirement change (2026-09-07): single app** — one executable
+   with both modes, superseding D4. Scoped as v1.2.0; see D10 (§4) and the
+   design sketch in `docs/HANDOFF_v1.1.1.md` §7.
+
+**Status (2026-09-07, v1.1.1):** items 1–3 are FIXED (see the v1.1.1 entry
+in §6 and `CHANGELOG.md`); item 2's original analysis was superseded — the
+silent threshold API works on 26200 once the GUID is correct. Item 4
+awaits the owner's app name/icon confirmation before the v1.2.0 work
+starts.
+
+Everything below was written at v1.1.0 release time and is kept for history.
 
 1. **Waves 1–5 — DONE** (see §5/§6): bootstrap, decomposition, logging core
    (`Log` contract in §3 — all modules log through `Log.Info` / `Log.Warn` /

@@ -1177,6 +1177,42 @@ commit hash); mark blocked with the reason. Add new rows at the bottom.
   portability file, release discipline): **`docs/HANDOFF_v1.1.1.md`**;
   §8 below carries the known-issues block.
 
+- **2026-09-07 — v1.1.1 (fix release) implemented.** Scope from
+  `docs/HANDOFF_v1.1.1.md`, executed per the owner's prompt:
+  - **Selection stage fixed** — `EnterSelect` (Forms.cs) now sets
+    `_selectPanel.Visible = true` after `SetSelectGroupsVisible(true)`.
+    The panel had been created hidden in the ctor and never shown, making
+    GO unreachable and every GO-gated feature dead (§8 item 1 resolved).
+  - **Energy Saver silent-first — root cause superseded the handoff's
+    premise.** The "threshold API removed on 24H2+/26200 (moved to
+    whesvc)" belief was WRONG on both counts: whesvc is "Windows Health
+    and Optimized Experiences" (unrelated), and the real failure was a
+    hallucinated GUID tail — the code used
+    `E69653CA-CF6F-4166-B25A-4D6A2C1B4E7F` while the OS defines
+    `e69653ca-cf7f-4f05-aa73-cb833fa90ad4` ("Charge level", 0-100%, under
+    `HKLM\...\PowerSettings\de830923-...`). Probe on build 26200 (on AC, no
+    behavior change): old GUID read rc=2; correct GUID read rc=0 (DC=30),
+    write rc=0, read-back verified. Fixes: GUID corrected;
+    `SetAutoThreshold` writes AC+DC with read-back verification; `Sync` is
+    silent-first with the Settings automation as fallback only. The UIA
+    fallback was also reworked: `mouse_event` removed entirely (expand
+    button via InvokePattern), pre-existing Settings windows are snapshotted
+    and never adopted/closed, our window is opened and kept minimized
+    (§8 item 2 resolved).
+  - Semantics note: Go Time writes 0% (ES never auto-engages while gaming —
+    intentionally stronger than the Settings toggle-off); Eco writes 100%
+    (always). Every step logged with raw rc.
+  - `Program.Version` → 1.1.1; `CHANGELOG.md` + `PORTABILITY.md` created
+    (owner's changelog/portability requirement, §8 item 3 resolved);
+    README gained the v1.1.1 entry.
+  - Build verified in-repo: both `/define` targets zero csc diagnostics;
+    banned-syntax scan (`$"`, `?.`, `nameof(`, `=>`, `??=`, `using static`)
+    zero hits on the changed files. The manual UAC-gated checklist
+    (BUILD_NOTES.md) remains owner verification — items 2, 5, 6, 7 exercise
+    exactly the two fixed paths.
+  - v1.2.0 (single-app merge, D10) intentionally NOT started — the owner
+    wants the final app name/icon confirmed first.
+
 ---
 
 ## §7 Build & verify (exact commands)
@@ -1211,7 +1247,7 @@ reference — fix the code, never change the compiler or add references outside
 
 ## §8 Next steps — PROJECT COMPLETE
 
-### Post-release known issues (v1.1.1 — OPEN)
+### Post-release known issues (items 1–3 FIXED in v1.1.1; item 4 = v1.2.0, pending)
 
 Found in the first real-world v1.1.0 run (2026-09-07); full analysis,
 verified file:line root causes and the v1.1.1 scope live in
@@ -1232,6 +1268,12 @@ verified file:line root causes and the v1.1.1 scope live in
 4. **Owner requirement change (2026-09-07): single app** — one executable
    with both modes, superseding D4. Scoped as v1.2.0; see D10 (§4) and the
    design sketch in `docs/HANDOFF_v1.1.1.md` §7.
+
+**Status (2026-09-07, v1.1.1):** items 1–3 are FIXED (see the v1.1.1 entry
+in §6 and `CHANGELOG.md`); item 2's original analysis was superseded — the
+silent threshold API works on 26200 once the GUID is correct. Item 4
+awaits the owner's app name/icon confirmation before the v1.2.0 work
+starts.
 
 Everything below was written at v1.1.0 release time and is kept for history.
 

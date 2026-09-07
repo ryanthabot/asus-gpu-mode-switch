@@ -9,6 +9,22 @@ GPU Performance* — without opening Armoury Crate at all.
 | **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
 | **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
 
+> **v1.1.1** — **the v1.1.0 blocker fixed + silent Energy Saver**: Go
+> Time's selection stage rendered empty (the stage panel was created hidden
+> and never shown — GO was unreachable, so the switch, optimizations,
+> cleanup, session tray and overlay never ran; one missing line, five
+> symptoms). Energy Saver switching is now **silent-first** in both apps:
+> the old "no silent API on 24H2+" belief traced to a wrong threshold GUID
+> tail — with the correct GUID the documented power API works on build
+> 26200. Eco writes the Energy Saver charge level to 100% (always engage),
+> Go Time to 0% (never auto-engages while gaming) — AC + DC, verified by
+> read-back, **nothing appears on screen**. The Settings automation is now
+> fallback-only and mouse-free (UIA Invoke/Toggle patterns on our own
+> minimized window only; your existing Settings windows are never touched).
+> Added **`CHANGELOG.md`** (one human-readable history of both apps,
+> updated every release) and **`PORTABILITY.md`** (carry the project
+> between PCs).
+
 > **v1.1.0** — **the session suite**: logging rewrite, storage cleanup,
 > performance features, session tray + overlay, named profiles, session
 > history and a live system monitor — all inside the same two executables.

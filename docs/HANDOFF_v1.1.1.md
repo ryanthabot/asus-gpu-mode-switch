@@ -8,6 +8,16 @@ D1–D9); this file adds what the handbook cannot say from inside the 18-agent
 build: what actually happened when a human used v1.1.0, what is broken, why,
 and exactly where the fixes go.
 
+> **v1.1.1 OUTCOME (2026-09-07):** §2.1 (selection stage) and §2.2 (Energy
+> Saver) are FIXED. §2.2's analysis was superseded during the fix — the
+> "silent threshold dead on 24H2+/26200 (whesvc)" premise was wrong: whesvc
+> is an unrelated service, and the real cause was a hallucinated GUID tail;
+> with the correct GUID the documented power API is silently writable on
+> build 26200 (probe-verified). See the v1.1.1 entries in HANDBOOK §6 and
+> CHANGELOG.md. §2.3's monitor note and §2.4's docs gaps are addressed.
+> §4.7 / §7 (single app, v1.2.0) pending the owner's name/icon decision.
+> This document is retained as the historical handoff record.
+
 - Repo: https://github.com/bigthabot/asus-gpu-mode-switch (primary/publish —
   at `5df43b7`, tag `v1.1.0`, at the time of writing).
 - Mirror: https://github.com/ryanthabot/asus-gpu-mode-switch — carries this

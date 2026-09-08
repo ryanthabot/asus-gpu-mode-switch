@@ -947,6 +947,7 @@ namespace GpuModeSwitch
         // ---- shell chrome ----------------------------------------------------
         private readonly System.Windows.Forms.Timer _clock = new System.Windows.Forms.Timer();
         private readonly Button _x = new Button();
+        private readonly Button _min = new Button();              // minimize, left of X
         private readonly Panel _side = new Panel();
         private readonly PictureBox _logo = new PictureBox();
         private readonly NavButton _navHome = new NavButton("\uE80F", "Home");
@@ -1033,6 +1034,7 @@ namespace GpuModeSwitch
         private MonitorOverlayForm _overlay;
         private List<CleanCategory> _tier1Measured;
         private List<string> _gateReasons;                        // null = unknown yet
+        private List<string> _gateReasonsSvc;                     // servicing-scoped (WU/DISM rows)
         private bool _measureStarted;
         private bool _optLaidOut;
         private string _cleanupSummary = "";
@@ -1191,6 +1193,19 @@ namespace GpuModeSwitch
                 Close();
             };
 
+            // Minimize (v1.2.1): borderless window, so the button drives
+            // WindowState directly. Safe during any phase - the background
+            // worker keeps running and the taskbar icon restores the window.
+            _min.Text = "\u2014";                     // —
+            _min.FlatStyle = FlatStyle.Flat;
+            _min.FlatAppearance.BorderSize = 0;
+            _min.ForeColor = Ui.TextDim;
+            _min.BackColor = Ui.Bg;
+            _min.Font = new Font("Segoe UI", 10f);
+            _min.Size = new Size(34, 28);
+            _min.TabStop = false;
+            _min.Click += delegate { WindowState = FormWindowState.Minimized; };
+
             // The header lives on its own strip (added to _content last, so
             // it is permanently topmost - see the ctor note). Add order is
             // deliberately REVERSED (x/status/bar first, title last): in the
@@ -1198,6 +1213,7 @@ namespace GpuModeSwitch
             // ever received paint, so the marquee controls are added last.
             _headerStrip.BackColor = Ui.Bg;
             _headerStrip.Controls.Add(_x);
+            _headerStrip.Controls.Add(_min);
             _headerStrip.Controls.Add(_bar);
             _headerStrip.Controls.Add(_status);
             _headerStrip.Controls.Add(_chipBus);
@@ -1593,6 +1609,7 @@ namespace GpuModeSwitch
             _chipGpu.SetBounds(_content.Width - 2 * (chipW + 8) - 24, 16, chipW, 24);
             _chipEs.SetBounds(_content.Width - (chipW + 8) - 24, 16, chipW, 24);
             _x.Location = new Point(_content.Width - 40, 8);
+            _min.Location = new Point(_content.Width - 76, 8);
             _bar.SetBounds(18, 74, _content.Width - 36 - 180, 6);
             _status.SetBounds(18, 84, _content.Width - 40, 26);
 
@@ -2053,7 +2070,8 @@ namespace GpuModeSwitch
                 }
 
                 List<string> gates = StorageAnalyzer.CheckGates();
-                SafeInvoke(delegate { ApplyMeasurements(tier1, deep, gpu, app, runningTargets, gates); });
+                List<string> gatesSvc = StorageAnalyzer.CheckGatesServicing();
+                SafeInvoke(delegate { ApplyMeasurements(tier1, deep, gpu, app, runningTargets, gates, gatesSvc); });
             });
         }
 
@@ -2075,10 +2093,11 @@ namespace GpuModeSwitch
 
         private void ApplyMeasurements(List<CleanCategory> tier1, List<CleanCategory> deep,
             List<CleanCategory> gpu, List<CleanCategory> app, List<string> runningTargets,
-            List<string> gates)
+            List<string> gates, List<string> gatesSvc)
         {
             _tier1Measured = tier1;
             _gateReasons = gates;
+            _gateReasonsSvc = gatesSvc;
             EnsureAppCacheSwitches();
 
             _cleanWuBox.Text = "Windows Update cache purge" + SizeSuffix(SumBytes(tier1, CleanCategory.KindWu));
@@ -2125,10 +2144,13 @@ namespace GpuModeSwitch
                 }
             }
 
-            // D7 gates: any block reason locks the whole cleanup card with the
-            // reasons in a visible amber banner - locked rows show a lock glyph
-            // (v1.1.1 field report: grayed-out boxes with no reason read as
-            // "the app is broken"). The cleaners re-check the gates at GO.
+            // D7 gates, scoped (v1.2.1): global gates (elevation missing)
+            // lock the whole cleanup card; SERVICING gates (pending reboot,
+            // WU busy) lock only the Windows Update / component store rows -
+            // temp, shader and browser caches stay available (a pending
+            // rename cannot interact with them, and v1.2.0's global lock
+            // froze the whole section on a normal machine). The cleaners
+            // re-check the gates at GO.
             if (gates != null && gates.Count > 0)
             {
                 _gateLabel.Text = "LOCKED - cleanup unavailable right now: " + string.Join("; ", gates.ToArray());
@@ -2139,6 +2161,15 @@ namespace GpuModeSwitch
                 _cleanGpuBox.Enabled = false;
                 foreach (ToggleSwitch sw in _appCacheBoxes) sw.Enabled = false;
                 foreach (string reason in gates) Log.Warn("cleanup gate: " + reason);
+            }
+            else if (gatesSvc != null && gatesSvc.Count > 0)
+            {
+                _gateLabel.Text = "Windows Update / component store rows LOCKED (restart Windows to clear): " +
+                    string.Join("; ", gatesSvc.ToArray());
+                _gateLabel.Visible = true;
+                _cleanWuBox.Enabled = false;
+                _cleanDismBox.Enabled = false;
+                foreach (string reason in gatesSvc) Log.Warn("cleanup gate (servicing): " + reason);
             }
 
             LayoutOptimize();
@@ -2164,11 +2195,12 @@ namespace GpuModeSwitch
             bool fThrottle = _optBoxes[3].Checked;
             bool fServices = _optBoxes[4].Checked;
             bool gatesClear = _gateReasons == null || _gateReasons.Count == 0;
+            bool gatesSvcClear = _gateReasonsSvc == null || _gateReasonsSvc.Count == 0;
             bool pFreeze = sessionFeatures && _freezeBox.Checked;
             bool pPlan = sessionFeatures && _planBox.Checked;
             bool pWuPause = sessionFeatures && _wuPauseBox.Checked;
-            bool cWu = sessionFeatures && gatesClear && _cleanWuBox.Checked;
-            bool cDism = sessionFeatures && gatesClear && _cleanDismBox.Checked;
+            bool cWu = sessionFeatures && gatesClear && gatesSvcClear && _cleanWuBox.Checked;
+            bool cDism = sessionFeatures && gatesClear && gatesSvcClear && _cleanDismBox.Checked;
             bool cDeep = sessionFeatures && gatesClear && _cleanDeepBox.Checked;
             bool cGpu = sessionFeatures && gatesClear && _cleanGpuBox.Checked;
             List<string> cleanApps = new List<string>();
@@ -2399,6 +2431,25 @@ namespace GpuModeSwitch
                 outc.DetailLines += "\nCleanup skipped - safety gates blocked it (see log)";
                 return outc;
             }
+
+            // Servicing gates (pending reboot / WU busy) scope to the WU purge
+            // and component store rows only - deep clean, shader caches and
+            // app caches never touch servicing state (v1.2.1).
+            if (cWu || cDism)
+            {
+                List<string> gateReasonsSvc = StorageAnalyzer.CheckGatesServicing();
+                if (gateReasonsSvc.Count > 0)
+                {
+                    if (cWu) outc.DetailLines += "\nWindows Update cache purge skipped - restart Windows first (see log)";
+                    if (cDism) outc.DetailLines += "\nComponent store cleanup skipped - restart Windows first (see log)";
+                    cWu = false;
+                    cDism = false;
+                }
+            }
+
+            bool anyCleanup2 = cWu || cDism || cDeep || cGpu ||
+                (cleanApps != null && cleanApps.Count > 0);
+            if (!anyCleanup2) return outc;
 
             if (cWu || cDeep)
             {

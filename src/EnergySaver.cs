@@ -123,16 +123,22 @@ namespace GpuModeSwitch
             }
         }
 
-        // Full sync, silent-first (v1.1.1): the documented charge-level
-        // threshold is the primary control (invisible, works on 24H2+/26200);
-        // the Settings automation only runs when that write fails, and it is
-        // minimized, mouse-free and never touches a pre-existing window.
+        // Full sync (v1.2.1): the Settings "Always use energy saver" switch
+        // is the PRIMARY control - on 24H2+/26200 the power service (whesvc)
+        // ignores the legacy charge-level threshold, so a threshold write
+        // that reports rc=0/verified can silently change nothing the user
+        // can see (v1.1.1 field regression: silent-first meant the working
+        // Settings toggle never ran). The threshold write is still made as
+        // a silent supplement for builds that honor it; success is judged
+        // on the real switch when its automation runs.
         public static bool Sync(bool on)
         {
             WriteSavedState(on);
-            if (SetAutoThreshold(on ? 100u : 0u)) return true;
-            Log.Chan("POWER", "EnergySaver: silent threshold write failed - falling back to minimized Settings automation");
-            return ToggleAlwaysUseEnergySaver(on);
+            bool thresholdOk = SetAutoThreshold(on ? 100u : 0u);
+            if (ToggleAlwaysUseEnergySaver(on)) return true;
+            Log.Chan("POWER", "EnergySaver: Settings automation failed - " +
+                        (thresholdOk ? "charge-level threshold still applied" : "no fallback succeeded"));
+            return thresholdOk;
         }
 
         [DllImport("user32.dll")]

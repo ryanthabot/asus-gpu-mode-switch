@@ -145,10 +145,10 @@ namespace GpuModeSwitch
         private const int CabMaxAgeDays = 30;       // e) CbsPersist_*.cab rule
         private const int MaxErrorSamples = 5;      // verbatim error notes per category
 
-        private static readonly string[] WuServiceNames =
-        {
-            "wuauserv", "bits", "UsoSvc", "DoSvc", "TrustedInstaller"
-        };
+        // (v1.2.1) the WuServiceNames busy-check moved out of the gates: the
+        // StorageCleaner itself stops usosvc -> wuauserv -> bits before the
+        // WU caches and restarts them afterwards - a "service is running"
+        // gate only locked cleanup that the cleaner was designed to do.
 
         // ---- API ------------------------------------------------------------
 
@@ -171,13 +171,15 @@ namespace GpuModeSwitch
             return results;
         }
 
-        // Returns the cleanup safety-gate block reasons (D7); an empty list
-        // means all gates are clear. Checked: process elevation, pending
-        // reboot (servicing registry flags, PendingFileRenameOperations,
-        // WinSxS pending.xml) and busy Windows Update services. Every
-        // individual check is try/caught and fails closed - a gate that
-        // cannot be verified becomes a block reason. Read-only; also writes
-        // the single "gates: ..." CLEAN line.
+        // GLOBAL cleanup gates (v1.2.1): the only condition that blocks every
+        // cleanup category is a missing elevation. Everything else is scoped
+        // to the servicing-adjacent categories - see CheckGatesServicing().
+        // (v1.2.0 regression: pending-reboot flags and busy Windows Update
+        // services were global gates, but bits/UsoSvc run almost permanently
+        // on Windows 11 and PendingFileRenameOperations lingers until the
+        // next reboot - together they locked the entire cleanup card on a
+        // normal machine, and the StorageCleaner already stops usosvc ->
+        // wuauserv -> bits itself before touching the WU caches.)
         public static List<string> CheckGates()
         {
             List<string> reasons = new List<string>();
@@ -205,6 +207,22 @@ namespace GpuModeSwitch
                 reasons.Add("Elevation could not be verified (" + ex.Message + ") - " +
                     "run the app as administrator to be safe.");
             }
+
+            Log.Chan("CLEAN", reasons.Count == 0
+                ? "gates: clear"
+                : "gates: " + reasons.Count.ToString("N0", CultureInfo.InvariantCulture) + " block reason(s)");
+            return reasons;
+        }
+
+        // SERVICING-scoped gates (v1.2.1): pending reboot signals and busy
+        // Windows Update services only block the Windows Update cache /
+        // component store rows - never the temp, shader or browser caches
+        // (those categories cannot interact with servicing state, and the
+        // cleaner's own stop/restart logic covers the WU services when the
+        // machine is clear to clean them).
+        public static List<string> CheckGatesServicing()
+        {
+            List<string> reasons = new List<string>();
 
             // - pending reboot signals ----------------------------------------
             try
@@ -277,37 +295,10 @@ namespace GpuModeSwitch
                     "restart Windows before cleaning to be safe.");
             }
 
-            // - Windows Update services busy ----------------------------------
-            foreach (string name in WuServiceNames)
-            {
-                try
-                {
-                    using (ServiceController sc = new ServiceController(name))
-                    {
-                        ServiceControllerStatus status = sc.Status;
-                        if (status == ServiceControllerStatus.Running ||
-                            status == ServiceControllerStatus.StartPending ||
-                            status == ServiceControllerStatus.StopPending)
-                        {
-                            reasons.Add("Windows Update service '" + name + "' is " + status +
-                                " - do not clean the Windows Update caches while it is busy.");
-                        }
-                    }
-                }
-                catch (InvalidOperationException)
-                {
-                    // Service not installed on this machine - not a gate.
-                }
-                catch (Exception ex)
-                {
-                    reasons.Add("Windows Update service '" + name + "' could not be checked (" +
-                        ex.Message + ") - treat its caches as busy.");
-                }
-            }
-
             Log.Chan("CLEAN", reasons.Count == 0
-                ? "gates: clear"
-                : "gates: " + reasons.Count.ToString("N0", CultureInfo.InvariantCulture) + " block reason(s)");
+                ? "gates (servicing): clear"
+                : "gates (servicing): " + reasons.Count.ToString("N0", CultureInfo.InvariantCulture) +
+                  " reason(s) - Windows Update / component store rows stay locked");
             return reasons;
         }
 

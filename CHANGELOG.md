@@ -7,6 +7,35 @@ renumbered or rewritten. Fuller prose for older versions lives in
 `README.md`; the authoritative code history is git; GitHub Releases carry
 the built executables.
 
+## v1.2.1 — 2026-09-07
+
+**Field fixes from the v1.2.0 black-ice logs** (three repairs, no behavior
+changes elsewhere):
+
+1. **Energy Saver actually switches again.** v1.1.1 made the charge-level
+   threshold write "silent-first" — but on build 26200 the power service
+   (whesvc) ignores that legacy setting, so the write reported
+   `rc=0 (verified)` while changing nothing the user can see, and the
+   working Settings automation never ran (the field log showed only
+   `setting energy saver charge level to 100%` and no Settings lines).
+   v1.2.1 inverts the order: the Settings "Always use energy saver"
+   automation is primary again (search-first, minimized, mouse-free), the
+   threshold write stays as a silent supplement for builds that honor it.
+2. **Storage cleanup is no longer all-locked on a normal machine.** The
+   safety gates were global: `bits`/`UsoSvc` running (near-permanent on
+   Windows 11) plus a lingering PendingFileRenameOperations entry locked
+   the entire cleanup card — even though the cleaner itself stops
+   usosvc → wuauserv → bits before the WU caches, and temp/shader/browser
+   caches cannot interact with servicing state. Gates are now scoped:
+   global (elevation only) locks everything; SERVICING gates (pending
+   reboot signals) lock only the Windows Update cache and component store
+   rows, with their own amber banner. The WU-busy check is gone as a gate
+   entirely (the cleaner's own stop/restart logic covers it). GO-time
+   re-checks follow the same scope.
+3. **Minimize button.** The borderless window's top-right corner now has
+   `—` (minimize) beside `✕` (exit). Minimizing is safe in any phase —
+   background work continues and the taskbar icon restores the window.
+
 ## v1.2.0 — 2026-09-07
 
 **THE SINGLE APP (owner decision D10): one executable, both modes.**

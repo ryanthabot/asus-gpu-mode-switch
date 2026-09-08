@@ -103,9 +103,9 @@ namespace GpuModeSwitch
         {
             _menu.Renderer = new ToolStripProfessionalRenderer(new DarkMenuColors());
             _menu.ShowImageMargin = false;
-            _menu.Items.Add(MakeItem("Open Go Time", _openWindow, "open"));
+            _menu.Items.Add(MakeItem("Open GPU Mode Switch", _openWindow, "open"));
             _menu.Items.Add(new ToolStripSeparator());
-            _menu.Items.Add(MakeItem("Restore (Eco Mode)", _applyEco, "restore (Eco Mode)"));
+            _menu.Items.Add(MakeItem("Go Eco (switch + restore)", _applyEco, "go eco"));
             _menu.Items.Add(MakeItem("Toggle overlay", _toggleOverlay, "overlay toggle"));
             _menu.Items.Add(MakeStatusItem());
             _menu.Items.Add(new ToolStripSeparator());

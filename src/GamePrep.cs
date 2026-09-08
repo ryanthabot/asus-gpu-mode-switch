@@ -45,7 +45,11 @@ namespace GpuModeSwitch
             }
         }
 
-        private static void SetHklmDword(string subKey, string valueName, uint value)
+        // v1.2.0: takes int - RegistryKey.SetValue REQUIRES System.Int32 for
+        // RegistryValueKind.DWord; the uint overload threw "type of the value
+        // object did not match" on every 0xFFFFFFFF write (see the 2026-09-07
+        // field log), so NetworkThrottlingIndex never actually turned off.
+        private static void SetHklmDword(string subKey, string valueName, int value)
         {
             try
             {
@@ -96,7 +100,7 @@ namespace GpuModeSwitch
             }
             if (throttle)
             {
-                SetHklmDword(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile", "NetworkThrottlingIndex", 0xFFFFFFFF);
+                SetHklmDword(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile", "NetworkThrottlingIndex", -1);   // 0xFFFFFFFF = no throttling
                 parts.Add("network throttling off");
             }
             else
@@ -150,7 +154,8 @@ namespace GpuModeSwitch
                 }
                 catch (Exception ex)
                 {
-                    Log.Info("GamePrep: " + svc + " stop failed - " + ex.Message);
+                    if (ex.Message != null && ex.Message.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0) Log.Info("GamePrep: " + svc + " not installed - skipped");
+                    else Log.Info("GamePrep: " + svc + " stop failed - " + ex.Message);
                 }
             }
             return paused;
@@ -189,7 +194,8 @@ namespace GpuModeSwitch
                 }
                 catch (Exception ex)
                 {
-                    Log.Info("GamePrep: " + svc + " start failed - " + ex.Message);
+                    if (ex.Message != null && ex.Message.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0) Log.Info("GamePrep: " + svc + " not installed - skipped");
+                    else Log.Info("GamePrep: " + svc + " start failed - " + ex.Message);
                 }
             }
             return running;
@@ -234,7 +240,8 @@ namespace GpuModeSwitch
                 }
                 catch (Exception ex)
                 {
-                    Log.Info("GamePrep: " + svc + " start failed - " + ex.Message);
+                    if (ex.Message != null && ex.Message.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0) Log.Info("GamePrep: " + svc + " not installed - skipped");
+                    else Log.Info("GamePrep: " + svc + " start failed - " + ex.Message);
                 }
             }
             return "Toasts restored, game captures on, network throttling default, " +

@@ -319,6 +319,7 @@ namespace GpuModeSwitch
             {
                 _files.Items.Clear();
                 _entries.Clear();
+                CollectFolder("GpuModeSwitch", "GPU Mode Switch");
                 CollectFolder("GoTime", "Go Time");
                 CollectFolder("EcoMode", "Eco Mode");
                 _entries.Sort(delegate (LogFileEntry a, LogFileEntry b)

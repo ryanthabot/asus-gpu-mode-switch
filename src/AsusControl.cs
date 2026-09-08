@@ -599,11 +599,7 @@ namespace GpuModeSwitch
             bool? es = EnergySaver.GetSavedState();
             s += "Windows Energy Saver (saved state): " + (es == null ? "unknown" : (es == true ? "on" : "off")) + "\n";
 
-#if MODE_ECO
-            s += "\nThis app switches to: ECO (dGPU off)";
-#else
-            s += "\nThis app switches to: STANDARD (dGPU on, hybrid)";
-#endif
+            s += "\nThis app switches to: either mode (unified - Home cards, --gotime/--eco)";
             return s;
         }
 

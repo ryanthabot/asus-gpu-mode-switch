@@ -353,24 +353,30 @@ namespace GpuModeSwitch
             return f.LastWriteTime;
         }
 
-        // Log subfolder / file prefix for an app name: contains "Eco" ->
-        // EcoMode, otherwise GoTime.
+        // Log subfolder / file prefix for an app name: "Eco" -> EcoMode,
+        // "Go Time"/"GoTime" -> GoTime (both = the retired v1.x exes; their
+        // old logs stay browsable), anything else (the unified
+        // "GPU Mode Switch") -> GpuModeSwitch.
         private static string FolderFor(string appName)
         {
-            if (appName != null && appName.IndexOf("Eco", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (appName != null)
             {
-                return "EcoMode";
+                if (appName.IndexOf("Eco", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return "EcoMode";
+                }
+                if (appName.IndexOf("Go Time", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    appName.IndexOf("GoTime", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return "GoTime";
+                }
             }
-            return "GoTime";
+            return "GpuModeSwitch";
         }
 
         private static string ActiveDefine()
         {
-#if MODE_ECO
-            return "MODE_ECO";
-#else
-            return "MODE_STANDARD";
-#endif
+            return "UNIFIED";   // v1.2.0: one target, no MODE_* defines
         }
 
         // Windows build number + update revision from the registry, e.g.

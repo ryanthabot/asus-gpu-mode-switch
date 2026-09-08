@@ -1,34 +1,22 @@
-//  Forms.cs  (v1.1.0 - Wave 6)
+//  Forms.cs  (v1.2.0 - unified app)
 //  ---------------------------
-//  The windows of both apps: the themed borderless main window with its
-//  phase machine and selection stage (MainForm + UiPhase), the log viewer
-//  (LogForm), the Go Time tray-app picker data (TrayAppInfo / TrayApps,
-//  MODE_STANDARD only), the eco-safe session restore helper (SessionSafety)
-//  and the freeze-list editor (FreezeListEditorForm, MODE_STANDARD only).
-//  Per-class comments below.
+//  The windows of the unified GPU Mode Switch app. MainForm (v1.2.0
+//  redesign): ONE borderless window with a sidebar rail (Home / Optimize /
+//  Monitor / History), a gradient header with live status chips, big mode
+//  cards on Home (GO TIME / ECO MODE - the active mode glows), the Go Time
+//  selection deck with animated ToggleSwitches in rounded cards (gate-
+//  locked cleanup rows show a lock banner with the reasons - the v1.1.1
+//  field report), a monitor page over the shared MonitorPanel, a history
+//  page (log viewer / log browser / session history) and a busy/result
+//  overlay shared by probe/apply/result. The apply chain, GO session
+//  features, session tray, overlay and eco-safe restore are the proven
+//  v1.1 logic with the MODE_STANDARD/MODE_ECO compile-time split removed:
+//  the mode is chosen at runtime (cards, --gotime/--eco flags or the
+//  session tray's eco item).
 //
-//  Split out of GpuModeSwitch.cs (Wave 2, zero behavior change). Wave 4
-//  upgraded LogForm into a full log viewer (history over past per-run logs,
-//  severity filter, find-next, open-folder).
-//
-//  Wave 6 (A18) wired the finished module APIs into the apps:
-//    - Go Time's selection stage grew the "Performance" group (background
-//      process freezer with an editable freeze list, Ultimate Performance
-//      plan, session-scoped Windows Update pause) and the "Storage cleanup"
-//      group (WU cache purge, DISM component store, deep clean, GPU shader
-//      caches, per-app caches - measured in the background, disabled with
-//      the reasons when the D7 safety gates block), plus named profiles
-//      (ProfileBar), a collapsible live system monitor (MonitorPanel) and
-//      result-stage "Log History" / "Session History" buttons. The whole
-//      stage lives in one scrollable panel; the form grows to make room.
-//    - GO now also runs the ticked session features (freeze -> power plan
-//      -> WU pause -> cleanup chain), records a SessionRecord and, on
-//      success, creates the session tray (with the overlay). --auto still
-//      applies ONLY the v1.0.22 set - the new groups never run unattended.
-//    - SessionSafety.RestoreAll() is the single eco-safe restore (frozen
-//      processes resumed, previous power plan back, Windows Update resumed,
-//      tray disposed), called on Eco Mode apply, the tray restore path,
-//      background errors, unhandled exceptions and window close.
+//  Unchanged from v1.1: the log viewer (LogForm), the eco-safe session
+//  restore helper (SessionSafety), the tray-app picker data (TrayAppInfo /
+//  TrayApps) and the freeze-list editor (FreezeListEditorForm).
 
 using System;
 using System.Collections.Generic;
@@ -603,7 +591,6 @@ namespace GpuModeSwitch
         }
     }
 
-#if MODE_STANDARD
     // ---------------------------------------------------------------------
     // Known tray applications for the Go Time post-switch picker. Candidates
     // are matched case-insensitively against running process names: contains
@@ -918,376 +905,176 @@ namespace GpuModeSwitch
             Close();
         }
     }
-#endif
-
     internal enum UiPhase
     {
-        Probe,      // contacting hardware, shimmer on
-        Confirm,    // waiting for the user to press Apply
-        Applying,   // switch running on the background thread
-        Result      // done or failed
+        Probe,      // contacting hardware (busy overlay, spinner)
+        Home,       // mode cards
+        Optimize,   // Go Time selection deck
+        Confirm,    // Eco review stage (opt-in via --confirm)
+        Applying,   // switch running on the background thread (busy overlay)
+        Result,     // done or failed (result overlay)
+        Monitor,    // live system monitor page
+        History     // logs + session history page
     }
 
+    // ---------------------------------------------------------------------
+    // MainForm (v1.2.0, unified): ONE window, both modes. Sidebar rail
+    // (Home / Optimize / Monitor / History), a gradient header with live
+    // status chips, two big mode cards on Home (GO TIME / ECO MODE with the
+    // active mode glowing), the Go Time selection deck rebuilt with animated
+    // ToggleSwitches inside rounded cards (gate-locked cleanup rows show a
+    // lock glyph + reasons), a monitor page over the existing MonitorPanel,
+    // a history page (log viewer / log browser / session history) and a
+    // busy/result overlay shared by probe/apply/result. The apply chain,
+    // GO session features, session tray, overlay and eco-safe restore are
+    // the proven v1.1 logic with the MODE_STANDARD/MODE_ECO split removed:
+    // the mode is chosen at runtime (cards, --gotime/--eco flags or the
+    // session tray's "Go Eco").
+    // ---------------------------------------------------------------------
     internal class MainForm : Form
     {
-        private readonly PictureBox _logo = new PictureBox();
-        private readonly Label _title = new Label();
-        private readonly Label _subtitle = new Label();
-        private readonly Label _status = new Label();
-        private readonly Label _detail = new Label();
-        private readonly ShimmerBar _bar = new ShimmerBar();
-        private readonly Button _apply = new Button();
-        private readonly Button _cancel = new Button();
-        private readonly Button _restart = new Button();
-        private readonly Button _logBtn = new Button();
-        private readonly Button _close = new Button();
-        private readonly Button _x = new Button();
-        private readonly System.Windows.Forms.Timer _clock = new System.Windows.Forms.Timer();
+        // ---- launch flags / state -------------------------------------------
         private readonly bool _confirmMode;
         private readonly bool _autoMode;
+        private readonly bool _startGo;
+        private readonly bool _startEco;
         private UiPhase _phase = UiPhase.Probe;
         private SwitchOutcome _last;
-#if MODE_STANDARD
-        private readonly Label _trayTitle = new Label();
-        private readonly Label _optTitle = new Label();
-        private readonly List<CheckBox> _trayBoxes = new List<CheckBox>();
-        private readonly List<CheckBox> _optBoxes = new List<CheckBox>();
+        private bool _currentEco = true;          // last known dGPU state (probe / switch)
+        private bool _esOn = true;                // last known Energy Saver state
+        private string _transport = "";
+
+        // ---- shell chrome ----------------------------------------------------
+        private readonly System.Windows.Forms.Timer _clock = new System.Windows.Forms.Timer();
+        private readonly Button _x = new Button();
+        private readonly Panel _side = new Panel();
+        private readonly PictureBox _logo = new PictureBox();
+        private readonly NavButton _navHome = new NavButton("\uE80F", "Home");
+        private readonly NavButton _navOpt = new NavButton("\uE945", "Optimize");
+        private readonly NavButton _navMon = new NavButton("\uE9D9", "Monitor");
+        private readonly NavButton _navHist = new NavButton("\uE823", "History");
+        private readonly Label _verLbl = new Label();
+        private readonly Label _title = new Label();   // plain Label: the GradientLabel never received WM_PAINT in the strip (see HANDBOOK v1.2.0 notes)
+        private readonly Label _subtitle = new Label();
+        private readonly Label _chipGpu = new Label();
+        private readonly Label _chipEs = new Label();
+        private readonly Label _chipBus = new Label();
+        private readonly ShimmerBar _bar = new ShimmerBar();
+        private readonly Label _status = new Label();
+        private readonly Panel _content = new Panel();
+        private readonly Panel _headerStrip = new Panel();   // always-topmost header (title/chips/status/X)
+
+        // ---- home section ----------------------------------------------------
+        private readonly Panel _homeSection = new Panel();
+        private readonly Label _homeCaption = new Label();
+        private readonly Label _homeStateBig = new Label();
+        private readonly Label _homeTransport = new Label();
+        private readonly ModeCard _goCard = new ModeCard();
+        private readonly ModeCard _ecoCard = new ModeCard();
+
+        // ---- optimize section ------------------------------------------------
+        private readonly Panel _optSection = new Panel();
+        private readonly Panel _optScroll = new Panel();          // AutoScroll host
+        private readonly Panel _optBottom = new Panel();          // GO action bar
+        private readonly AccentButton _goBtn = new AccentButton();
+        private readonly Button _optCancel = new Button();
+        private readonly ProfileBar _profileBar = new ProfileBar();
+        private readonly Card _sysCard = new Card();
+        private readonly List<ToggleSwitch> _optBoxes = new List<ToggleSwitch>();
+        private readonly Card _trayCard = new Card();
+        private readonly List<ToggleSwitch> _trayBoxes = new List<ToggleSwitch>();
         private readonly Button _closeTray = new Button();
         private bool _trayBusy;
-
-        // ---- Wave 6 (A18) selection-stage + session fields ------------------
-        private readonly Panel _selectPanel = new Panel();        // scrollable host for the whole selection stage
-        private readonly Label _precheckLabel = new Label();      // precheck text (was _detail in v1.0.22)
-        private readonly ProfileBar _profileBar = new ProfileBar();          // named profiles (A14)
-        private readonly Label _perfTitle = new Label();
-        private readonly CheckBox _freezeBox = new CheckBox();    // ProcessFreezer (A12)
+        private readonly Card _perfCard = new Card();
+        private readonly ToggleSwitch _freezeBox = new ToggleSwitch();
         private readonly Button _editFreezeList = new Button();
-        private readonly CheckBox _planBox = new CheckBox();      // PowerPlans (A13)
-        private readonly CheckBox _wuPauseBox = new CheckBox();   // WuPause (A13)
-        private readonly Label _cleanTitle = new Label();
-        private readonly CheckBox _cleanWuBox = new CheckBox();   // StorageCleaner (A7), WU-kind categories
-        private readonly CheckBox _cleanDismBox = new CheckBox(); // ComponentStore (A8)
-        private readonly CheckBox _cleanDeepBox = new CheckBox(); // tier-1 temp/WER/dumps + DeepClean (A10)
-        private readonly CheckBox _cleanGpuBox = new CheckBox();  // GpuTools (A11), shader caches only
-        private readonly List<CheckBox> _appCacheBoxes = new List<CheckBox>(); // one per installed app-cache target (A9)
-        private readonly Label _gateLabel = new Label();          // D7 safety-gate warning
-        private readonly Label _oldLabel = new Label();           // "previous Windows installations" report-only note
-        private readonly Button _monitorToggle = new Button();
-        private readonly MonitorPanel _monitorPanel = new MonitorPanel();    // live system monitor (A16)
-        private readonly Button _histBtn = new Button();          // result stage: Log History (A5)
-        private readonly Button _sessBtn = new Button();          // result stage: Session History (A15)
-        private SessionTray _tray;                                // session tray (A17), created after a successful GO
-        private MonitorOverlayForm _overlay;                      // gaming overlay (A17), created on first toggle
-        private List<CleanCategory> _tier1Measured;               // StorageAnalyzer.MeasureAll() snapshot, tier-1 kinds
-        private List<string> _gateReasons;                        // StorageAnalyzer.CheckGates() snapshot (null = unknown)
+        private readonly ToggleSwitch _planBox = new ToggleSwitch();
+        private readonly ToggleSwitch _wuPauseBox = new ToggleSwitch();
+        private readonly Card _cleanCard = new Card();
+        private readonly ToggleSwitch _cleanWuBox = new ToggleSwitch();
+        private readonly ToggleSwitch _cleanDismBox = new ToggleSwitch();
+        private readonly ToggleSwitch _cleanDeepBox = new ToggleSwitch();
+        private readonly ToggleSwitch _cleanGpuBox = new ToggleSwitch();
+        private readonly List<ToggleSwitch> _appCacheBoxes = new List<ToggleSwitch>();
+        private readonly Label _gateLabel = new Label();          // amber lock banner
+        private readonly Label _oldLabel = new Label();           // Windows.old report-only note
+
+        // ---- monitor section -------------------------------------------------
+        private readonly Panel _monSection = new Panel();
+        private readonly MonitorPanel _monitorPanel = new MonitorPanel();
+        private readonly Button _overlayBtn = new Button();
+        private readonly Label _monHint = new Label();
+
+        // ---- history section -------------------------------------------------
+        private readonly Panel _histSection = new Panel();
+        private readonly Button _histViewLog = new Button();
+        private readonly Button _histBrowser = new Button();
+        private readonly Button _histSessions = new Button();
+        private readonly Label _histPath = new Label();
+
+        // ---- busy / result overlay -------------------------------------------
+        private readonly Panel _busy = new Panel();
+        private readonly SpinGlyph _spin = new SpinGlyph();
+        private readonly Label _busyGlyph = new Label();          // result check / warning glyph
+        private readonly Label _busyTitle = new Label();
+        private readonly TextBox _busyText = new TextBox();
+        private readonly Label _resTrayTitle = new Label();
+        private readonly Button _resTrayClose = new Button();
+        private readonly Button _resLogBtn = new Button();
+        private readonly Button _resHistBtn = new Button();
+        private readonly Button _resSessBtn = new Button();
+        private readonly Button _resRestartBtn = new Button();
+        private readonly AccentButton _resHomeBtn = new AccentButton();
+        private readonly Button _confirmApplyBtn = new Button();
+        private readonly Button _confirmCancelBtn = new Button();
+
+        // ---- session (GO) state ----------------------------------------------
+        private SessionTray _tray;
+        private MonitorOverlayForm _overlay;
+        private List<CleanCategory> _tier1Measured;
+        private List<string> _gateReasons;                        // null = unknown yet
         private bool _measureStarted;
-        private bool _selectLaidOut;
-        private int _cleanGroupEndY;                              // panel y after the cleanup group (for the info labels)
-        private string _cleanupSummary = "";                      // result-stage cleanup summary block
-#endif
+        private bool _optLaidOut;
+        private string _cleanupSummary = "";
+        private bool _resultTrayAvailable;
 
-#if MODE_ECO
-        private const bool TargetEco = true;
-        private const string Title = "ECO MODE";
-        private const string Subtitle = "Eco GPU mode  |  dGPU powered off  |  battery friendly";
-        private readonly Color _accent = Color.FromArgb(76, 195, 138);
-#else
-        private const bool TargetEco = false;
-        private const string Title = "GO TIME";
-        private const string Subtitle = "Standard GPU mode  |  dGPU on  |  hybrid display path";
-        private readonly Color _accent = Color.FromArgb(255, 70, 85);
-#endif
-
-        public MainForm(bool confirmMode, bool autoMode)
+        public MainForm(bool autoMode, bool confirmMode, bool startGo, bool startEco)
         {
-            _confirmMode = confirmMode;
             _autoMode = autoMode;
+            _confirmMode = confirmMode;
+            _startGo = startGo;
+            _startEco = startEco;
 
-            Text = TargetEco ? "Eco Mode" : "Go Time";
+            Text = "GPU Mode Switch";
             FormBorderStyle = FormBorderStyle.None;
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = true;
             StartPosition = FormStartPosition.CenterScreen;
-#if MODE_STANDARD
-            ClientSize = new Size(560, 640);
-            MinimumSize = new Size(560, 640);
-#else
-            ClientSize = new Size(560, 400);
-            MinimumSize = new Size(560, 400);
-#endif
-            BackColor = Color.FromArgb(22, 22, 26);
-            Font = new Font("Segoe UI", 9.5f);
+            ClientSize = new Size(980, 660);
+            MinimumSize = new Size(880, 560);
+            BackColor = Ui.Bg;
+            Font = new Font("Segoe UI", 9.75f);
             Opacity = 0;
             WindowIcons.Apply(this);
-            Region = new Region(UiShapes.RoundRect(0, 0, ClientSize.Width, ClientSize.Height, 26));
+            Region = new Region(UiShapes.RoundRect(0, 0, ClientSize.Width, ClientSize.Height, 22));
 
-            Bitmap logo = LoadLogo();
-            if (logo != null)
-            {
-                _logo.Image = logo;
-                _logo.SizeMode = PictureBoxSizeMode.Zoom;
-                _logo.Location = new Point(24, 18);
-                _logo.Size = new Size(56, 56);
-                _logo.TabStop = false;
-                Controls.Add(_logo);
-            }
+            BuildSide();
+            BuildHeader();
+            BuildHome();
+            BuildOptimize();
+            BuildMonitor();
+            BuildHistory();
+            BuildBusyOverlay();
 
-            _title.Text = Title;
-            _title.Font = new Font("Segoe UI", 16f, FontStyle.Bold);
-            _title.ForeColor = _accent;
-            _title.AutoSize = true;
-            _title.Location = new Point(94, logo != null ? 24 : 24);
-            _title.BackColor = Color.Transparent;
+            _content.Controls.AddRange(new Control[] { _homeSection, _optSection, _monSection, _histSection, _busy });
+            _busy.BringToFront();                    // above the sections, below the header strip
+            _content.Controls.Add(_headerStrip);     // added last = topmost, permanently - ShowBusy's BringToFront can never cover it
+            Controls.Add(_content);
+            Controls.Add(_side);
 
-            _subtitle.Text = Subtitle + "   v" + Program.Version;
-            _subtitle.ForeColor = Color.FromArgb(150, 150, 158);
-            _subtitle.AutoSize = true;
-            _subtitle.Location = new Point(96, logo != null ? 56 : 56);
-            _subtitle.BackColor = Color.Transparent;
-
-            _x.Text = "X";
-            _x.FlatStyle = FlatStyle.Flat;
-            _x.FlatAppearance.BorderSize = 0;
-            _x.ForeColor = Color.FromArgb(140, 140, 148);
-            _x.BackColor = Color.FromArgb(22, 22, 26);
-            _x.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
-            _x.Size = new Size(32, 26);
-            _x.Location = new Point(ClientSize.Width - 42, 10);
-            _x.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            _x.TabStop = false;
-            _x.Click += delegate
-            {
-                if (_phase == UiPhase.Applying) return;   // never abandon a mid-flight write
-                Close();
-            };
-
-            _bar.Accent = _accent;
-            _bar.Location = new Point(24, 92);
-            _bar.Size = new Size(ClientSize.Width - 48, 8);
-            _bar.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-
-            _status.Text = "Starting...";
-            _status.ForeColor = Color.FromArgb(235, 235, 240);
-            _status.Font = new Font("Segoe UI", 11.5f, FontStyle.Bold);
-            _status.AutoSize = false;
-            _status.Size = new Size(ClientSize.Width - 48, 28);
-            _status.Location = new Point(24, 118);
-            _status.BackColor = Color.Transparent;
-            _status.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-
-            _detail.ForeColor = Color.FromArgb(165, 165, 172);
-            _detail.AutoSize = false;
-#if MODE_STANDARD
-            _detail.Size = new Size(ClientSize.Width - 48, 170);
-            _detail.Location = new Point(24, 368);
-#else
-            _detail.Size = new Size(ClientSize.Width - 48, 140);
-            _detail.Location = new Point(24, 148);
-#endif
-            _detail.BackColor = Color.Transparent;
-            _detail.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-
-            InitButton(_apply, "Apply", 150, 24, 36);
-            _apply.BackColor = _accent;
-            _apply.ForeColor = Color.White;
-            _apply.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
-            _apply.FlatAppearance.BorderSize = 0;
-            _apply.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            _apply.Click += delegate { BeginApply(); };
-
-            InitButton(_cancel, "Cancel", 90, 182, 36);
-            _cancel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            _cancel.Click += delegate { Close(); };
-
-            InitButton(_restart, "Restart now", 120, 24, 36);
-            _restart.Visible = false;
-            _restart.FlatAppearance.BorderColor = _accent;
-            _restart.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            _restart.Click += OnRestart;
-
-            InitButton(_logBtn, "View log", 90, 152, 36);
-            _logBtn.Visible = false;
-            _logBtn.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            _logBtn.Click += delegate
-            {
-                using (LogForm lf = new LogForm(TargetEco ? "Eco Mode" : "Go Time")) lf.ShowDialog(this);
-            };
-
-            InitButton(_close, "Close", 80, 250, 36);
-            _close.Visible = false;
-            _close.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            _close.Click += delegate { Close(); };
-
-#if MODE_STANDARD
-            // Result stage, second row (v1.1): log history browser (A5) and
-            // session history viewer (A15).
-            InitButton(_histBtn, "Log History", 110, 24, 36);
-            _histBtn.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            _histBtn.Click += delegate { LogBrowserForm.ShowBrowser(this); };
-            InitButton(_sessBtn, "Session History", 120, 142, 36);
-            _sessBtn.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            _sessBtn.Click += delegate { SessionHistoryForm.ShowHistory(this); };
-            _histBtn.Top = ClientSize.Height - 36 - 54;      // second button row
-            _sessBtn.Top = _histBtn.Top;
-#endif
-
-#if MODE_STANDARD
-            // ---- selection stage (v1.1): everything lives in one scrollable
-            // panel so the growing feature set fits the 560-wide window. The
-            // panel is shown by EnterSelect and reused in tray-only mode by
-            // the result stage (v1.0.22 kept the tray picker visible there).
-            _selectPanel.AutoScroll = true;
-            _selectPanel.BackColor = BackColor;
-            _selectPanel.Visible = false;
-            _selectPanel.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-
-            _precheckLabel.ForeColor = Color.FromArgb(165, 165, 172);
-            _precheckLabel.BackColor = Color.Transparent;
-            _precheckLabel.Visible = false;
-
-            _optTitle.Text = "System optimizations";
-            _optTitle.ForeColor = Color.FromArgb(165, 165, 172);
-            _optTitle.AutoSize = true;
-            _optTitle.BackColor = Color.Transparent;
-            _optTitle.Visible = false;
-
-            string[] optLabels = { "Game Mode", "Do not disturb", "Game DVR recording off", "Network throttling off", "Pause background services" };
-            string[] optKeys = { "opt.gamemode", "opt.dnd", "opt.dvr", "opt.throttle", "opt.services" };
-            for (int i = 0; i < optLabels.Length; i++)
-            {
-                CheckBox cb = MakeSelectCheckBox(optLabels[i], true);
-                cb.Tag = optKeys[i];                    // stable profile key
-                _optBoxes.Add(cb);
-            }
-
-            _trayTitle.Text = "Tray apps detected:";
-            _trayTitle.ForeColor = Color.FromArgb(165, 165, 172);
-            _trayTitle.AutoSize = true;
-            _trayTitle.BackColor = Color.Transparent;
-            _trayTitle.Visible = false;
-
-            for (int i = 0; i < TrayApps.Known.Length; i++)
-            {
-                CheckBox cb = MakeSelectCheckBox(TrayApps.Known[i].Label, false);
-                cb.Enabled = false;
-                cb.Tag = "tray." + TrayApps.Known[i].Label;   // stable profile key
-                _trayBoxes.Add(cb);
-            }
-
-            _closeTray.Text = "Close selected";
-            _closeTray.FlatStyle = FlatStyle.Flat;
-            _closeTray.FlatAppearance.BorderColor = _accent;
-            _closeTray.ForeColor = Color.White;
-            _closeTray.BackColor = Color.FromArgb(42, 42, 49);
-            _closeTray.Size = new Size(150, 26);
-            _closeTray.TabStop = false;
-            _closeTray.Visible = false;
-            _closeTray.Click += delegate { BeginCloseTrayApps(); };
-
-            // Performance group: session-scoped, fully reversible features.
-            _perfTitle.Text = "Performance";
-            _perfTitle.ForeColor = Color.FromArgb(165, 165, 172);
-            _perfTitle.AutoSize = true;
-            _perfTitle.BackColor = Color.Transparent;
-            _perfTitle.Visible = false;
-
-            _freezeBox = MakeSelectCheckBox("Freeze background apps", true);
-            _freezeBox.Tag = "perf.freeze";
-            _editFreezeList.Text = "Edit list...";
-            _editFreezeList.FlatStyle = FlatStyle.Flat;
-            _editFreezeList.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
-            _editFreezeList.ForeColor = Color.FromArgb(210, 210, 216);
-            _editFreezeList.BackColor = Color.FromArgb(42, 42, 49);
-            _editFreezeList.Size = new Size(110, 25);
-            _editFreezeList.TabStop = false;
-            _editFreezeList.Visible = false;
-            _editFreezeList.Click += delegate { ShowFreezeListEditor(); };
-
-            _planBox = MakeSelectCheckBox("Ultimate Performance plan", true);
-            _planBox.Tag = "perf.plan";
-            _wuPauseBox = MakeSelectCheckBox("Pause Windows Update", true);
-            _wuPauseBox.Tag = "perf.wupause";
-
-            // Storage cleanup group: deleting actions, so every box starts
-            // UNticked - cleanup only ever runs when explicitly chosen for
-            // this run (and never via --auto).
-            _cleanTitle.Text = "Storage cleanup";
-            _cleanTitle.ForeColor = Color.FromArgb(165, 165, 172);
-            _cleanTitle.AutoSize = true;
-            _cleanTitle.BackColor = Color.Transparent;
-            _cleanTitle.Visible = false;
-
-            _cleanWuBox = MakeSelectCheckBox("Windows Update cache purge", false);
-            _cleanWuBox.Tag = "clean.wu";
-            _cleanDismBox = MakeSelectCheckBox("Component store cleanup (DISM)", false);
-            _cleanDismBox.Tag = "clean.dism";
-            _cleanDeepBox = MakeSelectCheckBox("Deep clean", false);
-            _cleanDeepBox.Tag = "clean.deep";
-            _cleanGpuBox = MakeSelectCheckBox("GPU shader caches", false);
-            _cleanGpuBox.Tag = "clean.gpu";
-
-            _gateLabel.ForeColor = Color.FromArgb(255, 170, 110);
-            _gateLabel.BackColor = Color.Transparent;
-            _gateLabel.Visible = false;
-
-            _oldLabel.ForeColor = Color.FromArgb(150, 150, 158);
-            _oldLabel.BackColor = Color.Transparent;
-            _oldLabel.Visible = false;
-
-            _monitorToggle.Text = "Show system monitor";
-            _monitorToggle.FlatStyle = FlatStyle.Flat;
-            _monitorToggle.FlatAppearance.BorderSize = 0;
-            _monitorToggle.ForeColor = Color.FromArgb(165, 165, 172);
-            _monitorToggle.BackColor = BackColor;
-            _monitorToggle.TextAlign = ContentAlignment.MiddleLeft;
-            _monitorToggle.Size = new Size(180, 22);
-            _monitorToggle.TabStop = false;
-            _monitorToggle.Visible = false;
-            _monitorToggle.Click += delegate { OnMonitorToggle(); };
-
-            _monitorPanel.Visible = false;
-
-            // Named profiles (A14): collect/apply every checkbox by its
-            // stable Tag key.
-            _profileBar.CollectSelections += CollectAllSelections;
-            _profileBar.ApplyRequested += ApplyProfileSelections;
-
-            _selectPanel.Controls.Add(_profileBar);
-            _selectPanel.Controls.Add(_precheckLabel);
-            _selectPanel.Controls.Add(_optTitle);
-            foreach (CheckBox cb in _optBoxes) _selectPanel.Controls.Add(cb);
-            _selectPanel.Controls.Add(_trayTitle);
-            foreach (CheckBox cb in _trayBoxes) _selectPanel.Controls.Add(cb);
-            _selectPanel.Controls.Add(_closeTray);
-            _selectPanel.Controls.Add(_perfTitle);
-            _selectPanel.Controls.Add(_freezeBox);
-            _selectPanel.Controls.Add(_editFreezeList);
-            _selectPanel.Controls.Add(_planBox);
-            _selectPanel.Controls.Add(_wuPauseBox);
-            _selectPanel.Controls.Add(_cleanTitle);
-            _selectPanel.Controls.Add(_cleanWuBox);
-            _selectPanel.Controls.Add(_cleanDismBox);
-            _selectPanel.Controls.Add(_cleanDeepBox);
-            _selectPanel.Controls.Add(_cleanGpuBox);
-            _selectPanel.Controls.Add(_gateLabel);
-            _selectPanel.Controls.Add(_oldLabel);
-            _selectPanel.Controls.Add(_monitorToggle);
-            _selectPanel.Controls.Add(_monitorPanel);
-            Controls.Add(_selectPanel);
-#endif
-
-            Controls.AddRange(new Control[]
-            {
-                _title, _subtitle, _x, _bar, _status, _detail,
-                _apply, _cancel, _restart, _logBtn, _close
-            });
-
-            Shown += delegate
-            {
-                EnterProbe();
-            };
-
+            Shown += delegate { LayoutChrome(); EnterProbe(); };
+            Resize += delegate { LayoutChrome(); };
             _clock.Interval = 30;
             _clock.Tick += OnClock;
             _clock.Start();
@@ -1295,31 +1082,859 @@ namespace GpuModeSwitch
             FormClosed += delegate
             {
                 _clock.Dispose();
-                // Eco-safe restore on any exit (v1.1): never leave a frozen
-                // process, a paused Windows Update or a foreign power plan
-                // behind. All steps are no-ops when nothing is active.
+                // Eco-safe restore on any exit (v1.1 rule): never leave a frozen
+                // process, a paused Windows Update or a foreign power plan behind.
                 SessionSafety.RestoreAll();
-#if MODE_STANDARD
                 DisposeOverlay();
                 try { if (MonitorEngine.Running) MonitorEngine.Stop(); } catch { }
-#endif
                 AsusControl.Shutdown();
             };
         }
 
-#if MODE_STANDARD
-        // ---- selection stage helpers (v1.1, Wave 6) -------------------------
+        // ---- construction: shell ---------------------------------------------
 
-        private static CheckBox MakeSelectCheckBox(string text, bool ticked)
+        [DllImport("user32.dll")]
+        private static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        // Bare panel background = drag handle (the window is borderless).
+        private void MakeDraggable(Control c)
         {
-            CheckBox cb = new CheckBox();
-            cb.Text = text;
-            cb.AutoSize = true;
-            cb.ForeColor = Color.FromArgb(200, 200, 210);
-            cb.BackColor = Color.Transparent;
-            cb.Checked = ticked;
-            cb.Visible = false;
-            return cb;
+            c.MouseDown += delegate(object s, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    ReleaseCapture();
+                    SendMessage(Handle, 0xA1, (IntPtr)0x2, IntPtr.Zero);   // WM_NCLBUTTONDOWN, HTCAPTION
+                }
+            };
+        }
+
+        private void BuildSide()
+        {
+            _side.BackColor = Ui.BgSide;
+            MakeDraggable(_side);
+
+            Bitmap logo = LoadResourcePng("GpuModeSwitch.appicon.png");
+            if (logo != null)
+            {
+                _logo.Image = logo;
+                _logo.SizeMode = PictureBoxSizeMode.Zoom;
+                _logo.Size = new Size(42, 42);
+                _logo.Location = new Point(22, 20);
+                _logo.TabStop = false;
+                _side.Controls.Add(_logo);
+            }
+
+            _navHome.Click += delegate { ShowSection(UiPhase.Home); };
+            _navOpt.Click += delegate { EnterOptimize(); };
+            _navMon.Click += delegate { ShowMonitor(); };
+            _navHist.Click += delegate { ShowHistorySection(); };
+            _side.Controls.Add(_navHome);
+            _side.Controls.Add(_navOpt);
+            _side.Controls.Add(_navMon);
+            _side.Controls.Add(_navHist);
+
+            _verLbl.Text = "v" + Program.Version;
+            _verLbl.ForeColor = Ui.TextDim;
+            _verLbl.BackColor = Color.Transparent;
+            _verLbl.AutoSize = true;
+            _verLbl.Font = new Font("Segoe UI", 8f);
+            _side.Controls.Add(_verLbl);
+        }
+
+        private void BuildHeader()
+        {
+            _title.Text = "GPU MODE SWITCH";
+            _title.Font = new Font("Segoe UI", 15f, FontStyle.Bold);
+            _title.ForeColor = Ui.Cyan;
+            _title.BackColor = Ui.Bg;
+            _title.AutoSize = false;
+            _title.Size = new Size(310, 30);
+            _title.TextAlign = ContentAlignment.MiddleLeft;
+            _title.Location = new Point(0, 0);    // placed by LayoutChrome
+
+            _subtitle.Text = "unified command deck  \u2022  both modes, one app";
+            _subtitle.ForeColor = Ui.TextDim;
+            _subtitle.BackColor = Ui.Bg;
+            _subtitle.AutoSize = true;
+            _subtitle.Font = new Font("Segoe UI", 9f);
+
+            InitChip(_chipBus, "transport ?");
+            InitChip(_chipGpu, "GPU probe...");
+            InitChip(_chipEs, "Energy Saver ?");
+
+            _bar.Accent = Ui.Cyan;
+            _bar.Visible = false;
+
+            _status.Text = "Starting...";
+            _status.ForeColor = Ui.TextHi;
+            _status.Font = new Font("Segoe UI", 11f, FontStyle.Bold);
+            _status.BackColor = Ui.Bg;
+            _status.AutoSize = false;
+            _status.Height = 26;
+            MakeDraggable(_status);
+
+            _x.Text = "\u2715";                     // ✕
+            _x.FlatStyle = FlatStyle.Flat;
+            _x.FlatAppearance.BorderSize = 0;
+            _x.ForeColor = Ui.TextDim;
+            _x.BackColor = Ui.Bg;
+            _x.Font = new Font("Segoe UI", 10f);
+            _x.Size = new Size(34, 28);
+            _x.TabStop = false;
+            _x.Click += delegate
+            {
+                if (_phase == UiPhase.Applying) return;   // never abandon a mid-flight write
+                Close();
+            };
+
+            // The header lives on its own strip (added to _content last, so
+            // it is permanently topmost - see the ctor note). Add order is
+            // deliberately REVERSED (x/status/bar first, title last): in the
+            // first v1.2.0 build only the last-added children of the strip
+            // ever received paint, so the marquee controls are added last.
+            _headerStrip.BackColor = Ui.Bg;
+            _headerStrip.Controls.Add(_x);
+            _headerStrip.Controls.Add(_bar);
+            _headerStrip.Controls.Add(_status);
+            _headerStrip.Controls.Add(_chipBus);
+            _headerStrip.Controls.Add(_chipGpu);
+            _headerStrip.Controls.Add(_chipEs);
+            _headerStrip.Controls.Add(_subtitle);
+            _headerStrip.Controls.Add(_title);
+            MakeDraggable(_headerStrip);
+            _content.BackColor = Ui.Bg;
+        }
+
+        // Live status chip: a plain colored label (proven to paint) - text
+        // carries the state, the color carries the signal.
+        private void InitChip(Label chip, string text)
+        {
+            chip.Font = new Font("Segoe UI", 8.75f);
+            chip.BackColor = Ui.Bg;
+            chip.AutoSize = false;
+            chip.Size = new Size(170, 22);
+            chip.TextAlign = ContentAlignment.MiddleLeft;
+            SetChip(chip, text, Ui.TextDim);
+        }
+
+        private static void SetChip(Label chip, string text, Color color)
+        {
+            chip.Text = text;
+            chip.ForeColor = color;
+        }
+
+        // ---- construction: home ----------------------------------------------
+
+        private void BuildHome()
+        {
+            _homeSection.BackColor = Ui.Bg;
+
+            _homeCaption.Text = "CURRENT MODE";
+            _homeCaption.ForeColor = Ui.TextDim;
+            _homeCaption.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            _homeCaption.AutoSize = true;
+            _homeCaption.BackColor = Color.Transparent;
+
+            _homeStateBig.Text = "probing...";
+            _homeStateBig.ForeColor = Ui.TextHi;
+            _homeStateBig.Font = new Font("Segoe UI", 26f, FontStyle.Bold);
+            _homeStateBig.AutoSize = true;
+            _homeStateBig.BackColor = Color.Transparent;
+
+            _homeTransport.Text = "";
+            _homeTransport.ForeColor = Ui.TextDim;
+            _homeTransport.Font = new Font("Segoe UI", 9f);
+            _homeTransport.AutoSize = true;
+            _homeTransport.BackColor = Color.Transparent;
+
+            _goCard.CardTitle = "GO TIME";
+            _goCard.Tagline = "dGPU on \u2022 hybrid display path\nfull performance for the session";
+            _goCard.Hint = "CONFIGURE & LAUNCH";
+            _goCard.Accent = Ui.Go;
+            _goCard.Emblem = LoadResourcePng("GpuModeSwitch.gotime.png");
+            _goCard.Click += delegate { EnterOptimize(); };
+
+            _ecoCard.CardTitle = "ECO MODE";
+            _ecoCard.Tagline = "dGPU powered off \u2022 battery friendly\nEnergy Saver engages silently";
+            _ecoCard.Hint = "ONE CLICK - SWITCH NOW";
+            _ecoCard.Accent = Ui.Eco;
+            _ecoCard.Emblem = LoadResourcePng("GpuModeSwitch.ecomode.png");
+            _ecoCard.Click += delegate
+            {
+                if (_confirmMode)
+                {
+                    EnterEcoConfirm();
+                }
+                else
+                {
+                    BeginEcoApply();
+                }
+            };
+
+            MakeDraggable(_homeSection);
+            _homeSection.Controls.Add(_homeCaption);
+            _homeSection.Controls.Add(_homeStateBig);
+            _homeSection.Controls.Add(_homeTransport);
+            _homeSection.Controls.Add(_goCard);
+            _homeSection.Controls.Add(_ecoCard);
+        }
+
+        // ---- construction: optimize -------------------------------------------
+
+        private void BuildOptimize()
+        {
+            _optSection.BackColor = Ui.Bg;
+
+            _optScroll.AutoScroll = true;
+            _optScroll.BackColor = Ui.Bg;
+            MakeDraggable(_optScroll);
+
+            _sysCard.CardTitle = "System optimizations";
+            _sysCard.TitleAccent = Ui.Go;
+            string[] optLabels = { "Game Mode", "Do not disturb", "Game DVR recording off", "Network throttling off", "Pause background services" };
+            string[] optKeys = { "opt.gamemode", "opt.dnd", "opt.dvr", "opt.throttle", "opt.services" };
+            for (int i = 0; i < optLabels.Length; i++)
+            {
+                ToggleSwitch sw = MakeSwitch(optLabels[i], true, Ui.Go);
+                sw.Tag = optKeys[i];
+                _optBoxes.Add(sw);
+                _sysCard.Controls.Add(sw);
+            }
+
+            _trayCard.CardTitle = "Tray apps detected - tick to close for the session";
+            _trayCard.TitleAccent = Ui.Cyan;
+            for (int i = 0; i < TrayApps.Known.Length; i++)
+            {
+                ToggleSwitch sw = MakeSwitch(TrayApps.Known[i].Label, false, Ui.Cyan);
+                sw.Enabled = false;
+                sw.Tag = "tray." + TrayApps.Known[i].Label;
+                _trayBoxes.Add(sw);
+                _trayCard.Controls.Add(sw);
+            }
+            _closeTray.Text = "Close selected";
+            StyleSecondaryButton(_closeTray, 130, 28);
+            _closeTray.Click += delegate { BeginCloseTrayApps(); };
+            _trayCard.Controls.Add(_closeTray);
+
+            _perfCard.CardTitle = "Performance - session scoped, fully reversible";
+            _perfCard.TitleAccent = Ui.Go;
+            _freezeBox.Text = "Freeze background apps";
+            _freezeBox.Checked = true;
+            _freezeBox.Accent = Ui.Go;
+            _freezeBox.Tag = "perf.freeze";
+            _editFreezeList.Text = "Edit list...";
+            StyleSecondaryButton(_editFreezeList, 100, 26);
+            _editFreezeList.Click += delegate { ShowFreezeListEditor(); };
+            _planBox.Text = "Ultimate Performance plan";
+            _planBox.Checked = true;
+            _planBox.Accent = Ui.Go;
+            _planBox.Tag = "perf.plan";
+            _wuPauseBox.Text = "Pause Windows Update";
+            _wuPauseBox.Checked = true;
+            _wuPauseBox.Accent = Ui.Go;
+            _wuPauseBox.Tag = "perf.wupause";
+            _perfCard.Controls.Add(_freezeBox);
+            _perfCard.Controls.Add(_editFreezeList);
+            _perfCard.Controls.Add(_planBox);
+            _perfCard.Controls.Add(_wuPauseBox);
+
+            _cleanCard.CardTitle = "Storage cleanup - analyze-first, cache-only";
+            _cleanCard.TitleAccent = Ui.Cyan;
+            _cleanWuBox.Text = "Windows Update cache purge";
+            _cleanWuBox.Accent = Ui.Cyan;
+            _cleanWuBox.Tag = "clean.wu";
+            _cleanDismBox.Text = "Component store cleanup (DISM)";
+            _cleanDismBox.Accent = Ui.Cyan;
+            _cleanDismBox.Tag = "clean.dism";
+            _cleanDeepBox.Text = "Deep clean";
+            _cleanDeepBox.Accent = Ui.Cyan;
+            _cleanDeepBox.Tag = "clean.deep";
+            _cleanGpuBox.Text = "GPU shader caches";
+            _cleanGpuBox.Accent = Ui.Cyan;
+            _cleanGpuBox.Tag = "clean.gpu";
+            _gateLabel.ForeColor = Ui.Amber;
+            _gateLabel.BackColor = Color.Transparent;
+            _gateLabel.Font = new Font("Segoe UI", 8.75f);
+            _gateLabel.Visible = false;
+            _oldLabel.ForeColor = Ui.TextDim;
+            _oldLabel.BackColor = Color.Transparent;
+            _oldLabel.Font = new Font("Segoe UI", 8.75f);
+            _oldLabel.Visible = false;
+            _cleanCard.Controls.Add(_cleanWuBox);
+            _cleanCard.Controls.Add(_cleanDismBox);
+            _cleanCard.Controls.Add(_cleanDeepBox);
+            _cleanCard.Controls.Add(_cleanGpuBox);
+            _cleanCard.Controls.Add(_gateLabel);
+            _cleanCard.Controls.Add(_oldLabel);
+
+            // Named profiles (A14) collect/apply every switch by its stable Tag.
+            _profileBar.CollectSelections += CollectAllSelections;
+            _profileBar.ApplyRequested += ApplyProfileSelections;
+
+            _optScroll.Controls.Add(_profileBar);
+            _optScroll.Controls.Add(_sysCard);
+            _optScroll.Controls.Add(_trayCard);
+            _optScroll.Controls.Add(_perfCard);
+            _optScroll.Controls.Add(_cleanCard);
+
+            _optBottom.BackColor = Ui.Bg;
+            _goBtn.Text = "GO  \u25B8";
+            _goBtn.Size = new Size(150, 44);
+            _goBtn.From = Ui.Go;
+            _goBtn.To = Color.FromArgb(255, 140, 46);
+            _goBtn.Click += delegate { BeginGoApply(); };
+            _optCancel.Text = "Close";
+            StyleSecondaryButton(_optCancel, 90, 34);
+            _optCancel.Click += delegate { Close(); };
+            _optBottom.Controls.Add(_goBtn);
+            _optBottom.Controls.Add(_optCancel);
+
+            _optSection.Controls.Add(_optScroll);
+            _optSection.Controls.Add(_optBottom);
+        }
+
+        private static ToggleSwitch MakeSwitch(string text, bool on, Color accent)
+        {
+            ToggleSwitch sw = new ToggleSwitch();
+            sw.Text = text;
+            sw.Checked = on;
+            sw.Accent = accent;
+            return sw;
+        }
+
+        private void StyleSecondaryButton(Button b, int w, int h)
+        {
+            b.FlatStyle = FlatStyle.Flat;
+            b.FlatAppearance.BorderColor = Ui.CardBorder;
+            b.FlatAppearance.MouseOverBackColor = Color.FromArgb(38, 44, 60);
+            b.ForeColor = Ui.Text;
+            b.BackColor = Color.FromArgb(28, 33, 46);
+            b.Size = new Size(w, h);
+            b.Font = new Font("Segoe UI", 9f);
+            b.TabStop = false;
+            b.Cursor = Cursors.Hand;
+        }
+
+        // ---- construction: monitor + history ---------------------------------
+
+        private void BuildMonitor()
+        {
+            _monSection.BackColor = Ui.Bg;
+            MakeDraggable(_monSection);
+
+            _monitorPanel.Visible = true;
+            _overlayBtn.Text = "Show overlay over the game";
+            _overlayBtn.TextAlign = ContentAlignment.MiddleCenter;
+            StyleSecondaryButton(_overlayBtn, 240, 40);
+            _overlayBtn.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
+            _overlayBtn.Click += delegate { ToggleOverlay(); _overlayBtn.Text = "Toggle overlay over the game"; };
+
+            _monHint.Text = "The overlay is a compact always-on-top frame you can drag anywhere.\nIt only appears while a monitor engine is sampling (this page or an active GO session).";
+            _monHint.ForeColor = Ui.TextDim;
+            _monHint.Font = new Font("Segoe UI", 9f);
+            _monHint.BackColor = Color.Transparent;
+            _monHint.AutoSize = true;
+
+            _monSection.Controls.Add(_monitorPanel);
+            _monSection.Controls.Add(_overlayBtn);
+            _monSection.Controls.Add(_monHint);
+        }
+
+        private void BuildHistory()
+        {
+            _histSection.BackColor = Ui.Bg;
+            MakeDraggable(_histSection);
+
+            MakeHistoryButton(_histViewLog, "VIEW CURRENT LOG", "the live session log with filter + find");
+            _histViewLog.Click += delegate { using (LogForm lf = new LogForm("GPU Mode Switch")) lf.ShowDialog(this); };
+            MakeHistoryButton(_histBrowser, "LOG HISTORY", "every run of every app, searchable");
+            _histBrowser.Click += delegate { LogBrowserForm.ShowBrowser(this); };
+            MakeHistoryButton(_histSessions, "SESSION HISTORY", "what each GO run did and how much it freed");
+            _histSessions.Click += delegate { SessionHistoryForm.ShowHistory(this); };
+
+            _histPath.Text = "";
+            _histPath.ForeColor = Ui.TextDim;
+            _histPath.Font = new Font("Consolas", 8.5f);
+            _histPath.BackColor = Color.Transparent;
+            _histPath.AutoSize = true;
+
+            _histSection.Controls.Add(_histViewLog);
+            _histSection.Controls.Add(_histBrowser);
+            _histSection.Controls.Add(_histSessions);
+            _histSection.Controls.Add(_histPath);
+        }
+
+        private void MakeHistoryButton(Button b, string title, string caption)
+        {
+            b.FlatStyle = FlatStyle.Flat;
+            b.FlatAppearance.BorderColor = Ui.CardBorder;
+            b.FlatAppearance.MouseOverBackColor = Color.FromArgb(30, 36, 50);
+            b.ForeColor = Ui.TextHi;
+            b.BackColor = Ui.Card;
+            b.TextAlign = ContentAlignment.MiddleLeft;
+            b.Font = new Font("Segoe UI", 11.5f, FontStyle.Bold);
+            b.Size = new Size(420, 64);
+            b.Text = title + "\n" + caption;
+            b.TabStop = false;
+            b.Cursor = Cursors.Hand;
+        }
+
+        // ---- construction: busy / result overlay -------------------------------
+
+        private void BuildBusyOverlay()
+        {
+            _busy.BackColor = Ui.Bg;
+            _busy.Visible = false;
+
+            _spin.Accent = Ui.Cyan;
+            _spin.Size = new Size(56, 56);
+
+            _busyGlyph.Text = "";
+            _busyGlyph.Font = Ui.HasGlyphs ? Ui.Glyph(44f) : new Font("Segoe UI", 30f, FontStyle.Bold);
+            _busyGlyph.BackColor = Color.Transparent;
+            _busyGlyph.Size = new Size(72, 64);
+            _busyGlyph.TextAlign = ContentAlignment.MiddleCenter;
+            _busyGlyph.Visible = false;
+
+            _busyTitle.Text = "";
+            _busyTitle.Font = new Font("Segoe UI", 16f, FontStyle.Bold);
+            _busyTitle.ForeColor = Ui.TextHi;
+            _busyTitle.BackColor = Color.Transparent;
+            _busyTitle.AutoSize = false;
+            _busyTitle.Height = 32;
+            _busyTitle.TextAlign = ContentAlignment.MiddleCenter;
+
+            _busyText.Multiline = true;
+            _busyText.ReadOnly = true;
+            _busyText.ScrollBars = ScrollBars.Vertical;
+            _busyText.WordWrap = true;
+            _busyText.BackColor = Color.FromArgb(10, 12, 17);
+            _busyText.ForeColor = Color.FromArgb(198, 204, 216);
+            _busyText.BorderStyle = BorderStyle.None;
+            _busyText.Font = new Font("Consolas", 9f);
+
+            _resTrayTitle.Text = "TRAY APPS - tick what should close now";
+            _resTrayTitle.ForeColor = Ui.TextDim;
+            _resTrayTitle.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            _resTrayTitle.BackColor = Color.Transparent;
+            _resTrayTitle.AutoSize = true;
+            _resTrayTitle.Visible = false;
+            _resTrayClose.Text = "Close selected";
+            StyleSecondaryButton(_resTrayClose, 120, 26);
+            _resTrayClose.Visible = false;
+            _resTrayClose.Click += delegate { BeginCloseTrayApps(); };
+
+            _resLogBtn.Text = "View log";
+            _resHistBtn.Text = "Log History";
+            _resSessBtn.Text = "Session History";
+            _resRestartBtn.Text = "Restart now";
+            StyleSecondaryButton(_resLogBtn, 96, 34);
+            StyleSecondaryButton(_resHistBtn, 110, 34);
+            StyleSecondaryButton(_resSessBtn, 130, 34);
+            StyleSecondaryButton(_resRestartBtn, 120, 34);
+            _resLogBtn.Click += delegate { using (LogForm lf = new LogForm("GPU Mode Switch")) lf.ShowDialog(this); };
+            _resHistBtn.Click += delegate { LogBrowserForm.ShowBrowser(this); };
+            _resSessBtn.Click += delegate { SessionHistoryForm.ShowHistory(this); };
+            _resRestartBtn.Click += OnRestart;
+            _resHomeBtn.Text = "DONE - BACK TO HOME";
+            _resHomeBtn.Size = new Size(190, 38);
+            _resHomeBtn.From = Ui.Eco;
+            _resHomeBtn.To = Ui.Cyan;
+            _resHomeBtn.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            _resHomeBtn.Click += delegate { ShowSection(UiPhase.Home); };
+            _confirmApplyBtn.Text = "Apply";
+            _confirmApplyBtn.Size = new Size(110, 38);
+            _confirmApplyBtn.Click += delegate { BeginEcoApply(); };
+            _confirmCancelBtn.Text = "Cancel";
+            _confirmCancelBtn.Size = new Size(90, 38);
+            _confirmCancelBtn.Click += delegate { ShowSection(UiPhase.Home); };
+
+            _busy.Controls.Add(_spin);
+            _busy.Controls.Add(_busyGlyph);
+            _busy.Controls.Add(_busyTitle);
+            _busy.Controls.Add(_busyText);
+            _busy.Controls.Add(_resTrayTitle);
+            _busy.Controls.Add(_resTrayClose);
+            _busy.Controls.Add(_resLogBtn);
+            _busy.Controls.Add(_resHistBtn);
+            _busy.Controls.Add(_resSessBtn);
+            _busy.Controls.Add(_resRestartBtn);
+            _busy.Controls.Add(_resHomeBtn);
+            _busy.Controls.Add(_confirmApplyBtn);
+            _busy.Controls.Add(_confirmCancelBtn);
+        }
+
+        // ---- layout -------------------------------------------------------------
+
+        private void LayoutChrome()
+        {
+            int W = ClientSize.Width, H = ClientSize.Height;
+
+            // A 6px bare frame keeps the form's edge-resize hit area.
+            _side.SetBounds(6, 6, 86, H - 12);
+            _content.SetBounds(92, 6, W - 98, H - 12);
+
+            _logo.Location = new Point(22, 20);
+            int navY = 76;
+            _navHome.Location = new Point(0, navY);
+            _navOpt.Location = new Point(0, navY + 58);
+            _navMon.Location = new Point(0, navY + 116);
+            _navHist.Location = new Point(0, navY + 174);
+            _verLbl.Location = new Point(10, H - 40);
+
+            _title.Location = new Point(18, 16);
+            _subtitle.Location = new Point(20, 46);
+            int chipW = 170;
+            _chipBus.SetBounds(_content.Width - 3 * (chipW + 8) - 24, 16, chipW, 24);
+            _chipGpu.SetBounds(_content.Width - 2 * (chipW + 8) - 24, 16, chipW, 24);
+            _chipEs.SetBounds(_content.Width - (chipW + 8) - 24, 16, chipW, 24);
+            _x.Location = new Point(_content.Width - 40, 8);
+            _bar.SetBounds(18, 74, _content.Width - 36 - 180, 6);
+            _status.SetBounds(18, 84, _content.Width - 40, 26);
+
+            int cw = _content.Width, ch = _content.Height;
+            _headerStrip.SetBounds(0, 0, cw, 114);
+            _homeSection.SetBounds(0, 0, cw, ch);
+            _optSection.SetBounds(0, 0, cw, ch);
+            _monSection.SetBounds(0, 0, cw, ch);
+            _histSection.SetBounds(0, 0, cw, ch);
+            _busy.SetBounds(0, 0, cw, ch);
+
+            LayoutHome();
+            LayoutOptimize();
+            LayoutMonitor();
+            LayoutHistory();
+            LayoutBusy();
+        }
+
+        private void LayoutHome()
+        {
+            int W = _homeSection.Width;
+            _homeCaption.Location = new Point(18, 120);
+            _homeStateBig.Location = new Point(16, 138);
+            _homeTransport.Location = new Point(20, 186);
+
+            int cardW = _goCard.Width, gap = 18;
+            int total = cardW * 2 + gap;
+            int x = Math.Max(16, (W - total) / 2);
+            _goCard.Location = new Point(x, 216);
+            _ecoCard.Location = new Point(x + cardW + gap, 216);
+        }
+
+        private void LayoutOptimize()
+        {
+            int W = _optSection.Width, H = _optSection.Height;
+            _optBottom.SetBounds(0, H - 58, W, 58);
+            _optScroll.SetBounds(0, 114, W, H - 114 - 58);
+
+            int inner = Math.Min(W - 36, 780);
+            int x = Math.Max(8, (W - inner) / 2);
+            int y = 0;
+            int colW = (inner - 48 - 18) / 2;
+
+            _profileBar.SetBounds(x, y, inner, 44);
+            y += 54;
+
+            // system optimizations: 5 switches, two columns
+            _sysCard.SetBounds(x, y, inner, 40 + 3 * 34 + 14);
+            PositionPair(_optBoxes[0], _optBoxes[1], _sysCard, colW, 44, 0);
+            PositionPair(_optBoxes[2], _optBoxes[3], _sysCard, colW, 44, 1);
+            _optBoxes[4].SetBounds(24, 44 + 2 * 34, colW, 30);
+            y += _sysCard.Height + 12;
+
+            // tray apps: 5 switches + close button
+            _trayCard.SetBounds(x, y, inner, 40 + 3 * 34 + 40);
+            for (int i = 0; i < _trayBoxes.Count; i++)
+            {
+                int row = i / 2, col = i % 2;
+                _trayBoxes[i].SetBounds(24 + col * (colW + 18), 44 + row * 34, colW, 30);
+            }
+            _closeTray.Location = new Point(inner - 24 - _closeTray.Width, 44 + 3 * 34 + 4);
+            y += _trayCard.Height + 12;
+
+            // performance: freeze + edit-list, plan | wu-pause
+            _perfCard.SetBounds(x, y, inner, 40 + 2 * 34 + 14);
+            _freezeBox.SetBounds(24, 44, colW, 30);
+            _editFreezeList.Location = new Point(inner - 24 - _editFreezeList.Width, 46);
+            _planBox.SetBounds(24, 44 + 34, colW, 30);
+            _wuPauseBox.SetBounds(24 + colW + 18, 44 + 34, colW, 30);
+            y += _perfCard.Height + 12;
+
+            // storage cleanup: fixed 4 + app-cache rows + dynamic notes
+            EnsureAppCacheSwitches();
+            int rows = 2 + (_appCacheBoxes.Count + 1) / 2;
+            int notesH = (_gateLabel.Visible ? MeasureCardText(_gateLabel) + 6 : 0) +
+                         (_oldLabel.Visible ? MeasureCardText(_oldLabel) + 6 : 0);
+            _cleanCard.SetBounds(x, y, inner, 40 + rows * 34 + 14 + notesH);
+            PositionPair(_cleanWuBox, _cleanDismBox, _cleanCard, colW, 44, 0);
+            PositionPair(_cleanDeepBox, _cleanGpuBox, _cleanCard, colW, 44, 1);
+            for (int i = 0; i < _appCacheBoxes.Count; i++)
+            {
+                int row = 2 + i / 2, col = i % 2;
+                _appCacheBoxes[i].SetBounds(24 + col * (colW + 18), 44 + row * 34, colW, 30);
+            }
+            int noteY = 44 + rows * 34 + 4;
+            if (_oldLabel.Visible)
+            {
+                _oldLabel.SetBounds(24, noteY, inner - 48, MeasureCardText(_oldLabel));
+                noteY += _oldLabel.Height + 6;
+            }
+            if (_gateLabel.Visible)
+            {
+                _gateLabel.SetBounds(24, noteY, inner - 48, MeasureCardText(_gateLabel));
+            }
+            y += _cleanCard.Height + 12;
+
+            _optScroll.AutoScrollMinSize = new Size(0, y + 8);
+
+            _goBtn.Location = new Point(_optBottom.Width - _goBtn.Width - 28, 8);
+            _optCancel.Location = new Point(_goBtn.Left - _optCancel.Width - 10, 13);
+        }
+
+        private static void PositionPair(ToggleSwitch left, ToggleSwitch right, Card card, int colW, int top, int row)
+        {
+            left.SetBounds(24, top + row * 34, colW, 30);
+            if (right != null) right.SetBounds(24 + colW + 18, top + row * 34, colW, 30);
+        }
+
+        private int MeasureCardText(Label l)
+        {
+            Size s = TextRenderer.MeasureText(l.Text, l.Font, new Size(Math.Max(60, _cleanCard.Width - 48), 4000),
+                TextFormatFlags.WordBreak);
+            return Math.Max(18, s.Height + 2);
+        }
+
+        private void LayoutMonitor()
+        {
+            int W = _monSection.Width;
+            int mw = Math.Min(W - 48, 720);
+            _monitorPanel.SetBounds((W - mw) / 2, 120, mw, 240);
+            _overlayBtn.Location = new Point((W - _overlayBtn.Width) / 2, 380);
+            _monHint.Location = new Point((W - 420) / 2, _overlayBtn.Bottom + 12);
+        }
+
+        private void LayoutHistory()
+        {
+            int W = _histSection.Width;
+            int x = Math.Max(16, (W - _histViewLog.Width) / 2);
+            _histViewLog.Location = new Point(x, 130);
+            _histBrowser.Location = new Point(x, 130 + 76);
+            _histSessions.Location = new Point(x, 130 + 152);
+            _histPath.Location = new Point(x + 4, 130 + 152 + 76);
+            _histPath.Text = Log.CurrentLogPath.Length > 0 ? "this run: " + Log.CurrentLogPath : "";
+        }
+
+        private void LayoutBusy()
+        {
+            int W = _busy.Width, H = _busy.Height;
+            _spin.Location = new Point((W - _spin.Width) / 2, 64);
+            _busyGlyph.Location = new Point((W - _busyGlyph.Width) / 2, 60);
+            _busyTitle.SetBounds(24, 136, W - 48, 32);
+
+            int trayH = _resultTrayAvailable ? 118 : 0;
+            _busyText.SetBounds(40, 176, W - 80, Math.Max(60, H - 176 - 70 - trayH));
+
+            if (_resultTrayAvailable)
+            {
+                _resTrayTitle.Location = new Point(40, _busyText.Bottom + 10);
+                for (int i = 0; i < _trayBoxes.Count; i++)
+                {
+                    int row = i / 2, col = i % 2;
+                    _trayBoxes[i].SetBounds(40 + col * ((W - 220) / 2), _resTrayTitle.Bottom + 2 + row * 32,
+                        (W - 220) / 2, 28);
+                }
+                for (int i = 0; i < _trayBoxes.Count; i++) _busy.Controls.Add(_trayBoxes[i]);
+                _resTrayClose.Location = new Point(W - 40 - _resTrayClose.Width, _resTrayTitle.Bottom + 6);
+            }
+
+            _resHomeBtn.Location = new Point(W - _resHomeBtn.Width - 36, H - 50);
+            _resRestartBtn.Location = new Point(_resHomeBtn.Left - _resRestartBtn.Width - 10, H - 50);
+            _resSessBtn.Location = new Point(_resRestartBtn.Left - _resSessBtn.Width - 10, H - 50);
+            _resHistBtn.Location = new Point(_resSessBtn.Left - _resHistBtn.Width - 10, H - 50);
+            _resLogBtn.Location = new Point(_resHistBtn.Left - _resLogBtn.Width - 10, H - 50);
+            _confirmApplyBtn.Location = new Point(W / 2 - 110, H - 60);
+            _confirmCancelBtn.Location = new Point(W / 2 + 10, H - 60);
+        }
+
+        // ---- section navigation ---------------------------------------------
+
+        private void ShowSection(UiPhase section)
+        {
+            if (_phase == UiPhase.Applying) return;    // never navigate mid-flight
+            _phase = section;
+            _busy.Visible = false;
+            _homeSection.Visible = section == UiPhase.Home;
+            _optSection.Visible = section == UiPhase.Optimize;
+            _monSection.Visible = section == UiPhase.Monitor;
+            _histSection.Visible = section == UiPhase.History;
+            _navHome.Active = section == UiPhase.Home;
+            _navOpt.Active = section == UiPhase.Optimize;
+            _navMon.Active = section == UiPhase.Monitor;
+            _navHist.Active = section == UiPhase.History;
+            _bar.Visible = false;
+            _bar.Active = false;
+            if (section == UiPhase.Home) { _status.Text = "Choose a mode - the switch is one click away."; }
+            if (section == UiPhase.History) LayoutHistory();
+            if (section == UiPhase.Optimize) { LayoutOptimize(); StartMeasureOnce(); }
+        }
+
+        private void ShowMonitor()
+        {
+            if (_phase == UiPhase.Applying) return;
+            _phase = UiPhase.Monitor;
+            _busy.Visible = false;
+            _homeSection.Visible = false;
+            _optSection.Visible = false;
+            _monSection.Visible = true;
+            _histSection.Visible = false;
+            _navHome.Active = false;
+            _navOpt.Active = false;
+            _navMon.Active = true;
+            _navHist.Active = false;
+            EnsureMonitorEngine();
+            _monitorPanel.AttachToEngine();
+            _status.Text = "Live system monitor - the overlay stays over the game.";
+        }
+
+        private void ShowHistorySection()
+        {
+            ShowSection(UiPhase.History);
+            _status.Text = "Every run is logged - this run included.";
+        }
+
+        // ---- probe / state ----------------------------------------------------
+
+        private void EnterProbe()
+        {
+            _phase = UiPhase.Probe;
+            SetNavEnabled(false);
+            _busy.Visible = true;
+            _spin.Visible = true;
+            _busyGlyph.Visible = false;
+            _busyTitle.Text = "Contacting ASUS hardware...";
+            _busyText.Visible = false;
+            ShowResultButtons(false, false);
+            _bar.Visible = true;
+            _bar.Active = true;
+            _status.Text = "Probing...";
+            Log.Info("UI: probing");
+
+            RunBg(delegate
+            {
+                bool ok;
+                string msg = AsusControl.Precheck(false, out ok);
+                bool? es = EnergySaver.GetSavedState();
+                SafeInvoke(delegate
+                {
+                    if (!ok)
+                    {
+                        EnterResult(false, "ASUS hardware interface not found", msg, null);
+                        return;
+                    }
+                    _currentEco = AsusControl.GetDgpuState() == 1;
+                    _esOn = es == null ? _currentEco : es.Value;
+                    try
+                    {
+                        string[] lines = AsusControl.DescribeState().Replace("\r\n", "\n").Split('\n');
+                        if (lines.Length > 0) _transport = lines[0].Trim();
+                    }
+                    catch { }
+                    UpdateStateUi();
+                    SetNavEnabled(true);
+
+                    if (_autoMode || _startGo)
+                    {
+                        EnterOptimize();
+                        if (_autoMode)
+                        {
+                            // --auto (unchanged semantics): apply ONLY the system
+                            // optimizations + GPU switch, no selection stage.
+                            Log.Info("UI: --auto given, applying right away");
+                            BeginGoApply();
+                        }
+                    }
+                    else if (_startEco)
+                    {
+                        if (_confirmMode) EnterEcoConfirm();
+                        else BeginEcoApply();
+                    }
+                    else
+                    {
+                        ShowSection(UiPhase.Home);
+                    }
+                });
+            });
+        }
+
+        private void SetNavEnabled(bool on)
+        {
+            _navHome.Enabled = on;
+            _navOpt.Enabled = on;
+            _navMon.Enabled = on;
+            _navHist.Enabled = on;
+        }
+
+        // Paints the live state everywhere it shows: header chips, the Home
+        // banner and the ACTIVE badges on the mode cards.
+        private void UpdateStateUi()
+        {
+            string gpu = _currentEco ? "dGPU OFF (Eco)" : "dGPU ON (Standard)";
+            SetChip(_chipGpu, gpu, _currentEco ? Ui.Eco : Ui.Go);
+            SetChip(_chipEs, "Energy Saver " + (_esOn ? "ON" : "OFF"), _esOn ? Ui.Eco : Ui.TextDim);
+            SetChip(_chipBus, _transport.Length > 0 ? _transport : "transport ?", Ui.Cyan);
+
+            _homeStateBig.Text = _currentEco ? "ECO" : "STANDARD";
+            _homeStateBig.ForeColor = _currentEco ? Ui.Eco : Ui.Go;
+            _homeTransport.Text = _transport;
+            _goCard.CardActive = !_currentEco;
+            _ecoCard.CardActive = _currentEco;
+        }
+
+        // ---- optimize section --------------------------------------------------
+
+        private void EnterOptimize()
+        {
+            if (_phase == UiPhase.Applying) return;
+            _phase = UiPhase.Optimize;
+            _busy.Visible = false;
+            _homeSection.Visible = false;
+            _optSection.Visible = true;
+            _monSection.Visible = false;
+            _histSection.Visible = false;
+            _navHome.Active = false;
+            _navOpt.Active = true;
+            _navMon.Active = false;
+            _navHist.Active = false;
+            _status.Text = "Ready - choose what GO applies, then press GO.";
+            EnsureMonitorEngine();
+            _monitorPanel.AttachToEngine();
+            LayoutOptimize();
+            StartMeasureOnce();
+            BeginTrayDetect();
+            Log.Info("UI: selection stage");
+        }
+
+        // One checkbox per installed app-cache target whose cache dirs resolved
+        // non-empty (created once, laid out every pass).
+        private void EnsureAppCacheSwitches()
+        {
+            if (_optLaidOut) return;
+            _optLaidOut = true;
+            List<AppCacheTarget> targets = AppCacheCleaner.Targets();
+            for (int i = 0; i < targets.Count; i++)
+            {
+                AppCacheTarget t = targets[i];
+                if (t.CacheDirs == null || t.CacheDirs.Length == 0) continue;
+                ToggleSwitch sw = MakeSwitch("Clean " + t.Name + " cache", false, Ui.Cyan);
+                sw.Tag = "clean.appcache." + t.Name;
+                sw.Name = t.Name;
+                _appCacheBoxes.Add(sw);
+                _cleanCard.Controls.Add(sw);
+            }
         }
 
         private void ShowFreezeListEditor()
@@ -1331,42 +1946,16 @@ namespace GpuModeSwitch
             }
         }
 
-        private void OnMonitorToggle()
-        {
-            bool show = !_monitorPanel.Visible;
-            _monitorPanel.Visible = show;
-            _monitorToggle.Text = show ? "Hide system monitor" : "Show system monitor";
-            if (show) _monitorPanel.AttachToEngine();
-            else _monitorPanel.DetachFromEngine();
-            Log.Chan("MONITOR", "UI: system monitor section " + (show ? "expanded" : "collapsed"));
-        }
-
-        // Positions the tray group at the given panel-relative y. Used at the
-        // top of the panel in result (tray-only) mode and inline in select mode.
-        private void LayoutTrayGroup(int topY)
-        {
-            _trayTitle.SetBounds(0, topY, 0, 0, BoundsSpecified.Location);
-            _trayBoxes[0].SetBounds(0, topY + 24, 0, 0, BoundsSpecified.Location);
-            _trayBoxes[1].SetBounds(276, topY + 24, 0, 0, BoundsSpecified.Location);
-            _trayBoxes[2].SetBounds(0, topY + 50, 0, 0, BoundsSpecified.Location);
-            _trayBoxes[3].SetBounds(276, topY + 50, 0, 0, BoundsSpecified.Location);
-            _trayBoxes[4].SetBounds(0, topY + 76, 0, 0, BoundsSpecified.Location);
-            _closeTray.SetBounds(276, topY + 74, 150, 26);
-        }
-
-        // Starts the tray detection round: rows show "Scanning...", the
-        // background thread detects, the rows populate. Used by both the
-        // select stage and the result stage's tray-only section.
+        // Starts a tray detection round: rows show "Scanning...", the
+        // background thread detects, rows populate (shared by the optimize
+        // deck and the result overlay).
         private void BeginTrayDetect()
         {
-            _trayTitle.Visible = true;
-            _closeTray.Visible = true;
-            foreach (CheckBox cb in _trayBoxes)
+            foreach (ToggleSwitch sw in _trayBoxes)
             {
-                cb.Visible = true;
-                cb.Text = "Scanning...";
-                cb.Checked = false;
-                cb.Enabled = false;
+                sw.Text = "Scanning...";
+                sw.Checked = false;
+                sw.Enabled = false;
             }
             RunBg(delegate
             {
@@ -1380,62 +1969,20 @@ namespace GpuModeSwitch
             for (int i = 0; i < TrayApps.Known.Length && i < _trayBoxes.Count; i++)
             {
                 TrayAppInfo a = TrayApps.Known[i];
-                _trayBoxes[i].Visible = true;
                 _trayBoxes[i].Text = a.Label + (a.Running ? "  (running)" : "  (not running)");
                 _trayBoxes[i].Checked = a.Running;
                 _trayBoxes[i].Enabled = a.Running;
             }
         }
 
-        // Shows (select mode) or hides (result tray-only mode) every non-tray
-        // part of the selection panel.
-        private void SetSelectGroupsVisible(bool on)
-        {
-            _profileBar.Visible = on;
-            _precheckLabel.Visible = on;
-            _optTitle.Visible = on;
-            foreach (CheckBox cb in _optBoxes) cb.Visible = on;
-            _perfTitle.Visible = on;
-            _freezeBox.Visible = on;
-            _editFreezeList.Visible = on;
-            _planBox.Visible = on;
-            _wuPauseBox.Visible = on;
-            _cleanTitle.Visible = on;
-            _cleanWuBox.Visible = on;
-            _cleanDismBox.Visible = on;
-            _cleanDeepBox.Visible = on;
-            _cleanGpuBox.Visible = on;
-            foreach (CheckBox cb in _appCacheBoxes) cb.Visible = on;
-            _gateLabel.Visible = on && _gateLabel.Text.Length > 0;
-            _oldLabel.Visible = on && _oldLabel.Text.Length > 0;
-            _monitorToggle.Visible = on;
-            if (!on) _monitorPanel.Visible = false;
-        }
-
-        // Result stage, v1.0.22 behavior kept: the tray picker stays available
-        // after the switch. It now lives at the top of the selection panel.
-        private void EnterResultTraySection()
-        {
-            _selectPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            _selectPanel.Location = new Point(24, 252);
-            _selectPanel.Size = new Size(ClientSize.Width - 48, 112);
-            _selectPanel.Visible = true;
-            SetSelectGroupsVisible(false);
-            LayoutTrayGroup(2);
-            BeginTrayDetect();
-        }
-
         private void BeginCloseTrayApps()
         {
             if (_trayBusy) return;
-            List<TrayAppInfo> selected = new List<TrayAppInfo>();
-            for (int i = 0; i < TrayApps.Known.Length && i < _trayBoxes.Count; i++)
-            {
-                if (_trayBoxes[i].Checked && TrayApps.Known[i].Running) selected.Add(TrayApps.Known[i]);
-            }
+            List<TrayAppInfo> selected = GatherSelectedTrayApps();
             if (selected.Count == 0) return;
 
             _trayBusy = true;
+            _resTrayClose.Enabled = false;
             _closeTray.Enabled = false;
             Log.Chan("TRAY", "TrayApps: closing " + selected.Count + " selected app(s)");
             RunBg(delegate
@@ -1444,369 +1991,27 @@ namespace GpuModeSwitch
                 TrayApps.Detect();
                 SafeInvoke(delegate
                 {
-                    for (int i = 0; i < TrayApps.Known.Length && i < _trayBoxes.Count; i++)
-                    {
-                        TrayAppInfo a = TrayApps.Known[i];
-                        _trayBoxes[i].Text = a.Label + (a.Running ? "  (running)" : "  (not running)");
-                        _trayBoxes[i].Checked = a.Running;
-                        _trayBoxes[i].Enabled = a.Running;
-                    }
+                    PopulateTrayRows();
                     _trayBusy = false;
+                    _resTrayClose.Enabled = true;
                     _closeTray.Enabled = true;
                 });
             });
         }
-#endif
 
-        private void InitButton(Button b, string text, int width, int x, int height)
+        private List<TrayAppInfo> GatherSelectedTrayApps()
         {
-            b.Text = text;
-            b.FlatStyle = FlatStyle.Flat;
-            b.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
-            b.ForeColor = Color.FromArgb(220, 220, 226);
-            b.BackColor = Color.FromArgb(42, 42, 49);
-            b.Size = new Size(width, height);
-            b.Location = new Point(x, ClientSize.Height - height - 18);
-            b.TabStop = false;
-            b.Visible = false;
-        }
-
-        // The exe's 256px icon artwork is embedded per-build as resource
-        // "GpuModeSwitch.appicon.png" (see build.cmd).
-        private static Bitmap LoadLogo()
-        {
-            try
+            List<TrayAppInfo> list = new List<TrayAppInfo>();
+            for (int i = 0; i < TrayApps.Known.Length && i < _trayBoxes.Count; i++)
             {
-                Stream s = typeof(Program).Assembly.GetManifestResourceStream("GpuModeSwitch.appicon.png");
-                if (s == null) return null;
-                using (Bitmap tmp = new Bitmap(s))
-                {
-                    return new Bitmap(tmp);   // detached copy; the stream can go away
-                }
+                if (_trayBoxes[i].Checked && TrayApps.Known[i].Running) list.Add(TrayApps.Known[i]);
             }
-            catch
-            {
-                return null;
-            }
+            return list;
         }
 
-        private void OnClock(object sender, EventArgs e)
-        {
-            if (Opacity < 1) Opacity = Math.Min(1, Opacity + 0.07);
-            _bar.Advance();
-        }
-
-        // Borderless window: edges resize, any bare interior area drags.
-        protected override void WndProc(ref Message m)
-        {
-            const int WM_NCHITTEST = 0x84;
-            const int HTCLIENT = 1;
-            const int HTCAPTION = 2;
-            const int HTLEFT = 10;
-            const int HTRIGHT = 11;
-            const int HTTOP = 12;
-            const int HTTOPLEFT = 13;
-            const int HTTOPRIGHT = 14;
-            const int HTBOTTOM = 15;
-            const int HTBOTTOMLEFT = 16;
-            const int HTBOTTOMRIGHT = 17;
-
-            if (m.Msg == WM_NCHITTEST)
-            {
-                base.WndProc(ref m);
-                if ((int)m.Result == HTCLIENT)
-                {
-                    int lp = m.LParam.ToInt32();
-                    Point pt = PointToClient(new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF)));
-                    int e = 10;
-                    bool l = pt.X <= e, r = pt.X >= ClientSize.Width - e;
-                    bool t = pt.Y <= e, b = pt.Y >= ClientSize.Height - e;
-                    if (t && l) m.Result = (IntPtr)HTTOPLEFT;
-                    else if (t && r) m.Result = (IntPtr)HTTOPRIGHT;
-                    else if (b && l) m.Result = (IntPtr)HTBOTTOMLEFT;
-                    else if (b && r) m.Result = (IntPtr)HTBOTTOMRIGHT;
-                    else if (l) m.Result = (IntPtr)HTLEFT;
-                    else if (r) m.Result = (IntPtr)HTRIGHT;
-                    else if (t) m.Result = (IntPtr)HTTOP;
-                    else if (b) m.Result = (IntPtr)HTBOTTOM;
-                    else m.Result = (IntPtr)HTCAPTION;
-                }
-                return;
-            }
-            base.WndProc(ref m);
-        }
-
-        protected override void OnResize(EventArgs e)
-        {
-            base.OnResize(e);
-            Region = new Region(UiShapes.RoundRect(0, 0, ClientSize.Width, ClientSize.Height, 26));
-        }
-
-        // ---- phase helpers -------------------------------------------------
-
-        private void HideAllButtons()
-        {
-            _apply.Visible = _cancel.Visible = _restart.Visible = false;
-            _logBtn.Visible = _close.Visible = false;
-#if MODE_STANDARD
-            _histBtn.Visible = _sessBtn.Visible = false;
-#endif
-        }
-
-        private void EnterProbe()
-        {
-            _phase = UiPhase.Probe;
-            HideAllButtons();
-            _bar.Active = true;
-            _bar.Visible = true;
-            _status.ForeColor = Color.FromArgb(235, 235, 240);
-            _status.Text = "Contacting ASUS hardware...";
-            _detail.Text = "";
-            Log.Info("UI: probing");
-
-            RunBg(delegate
-            {
-                bool ok;
-                string msg = AsusControl.Precheck(TargetEco, out ok);
-                SafeInvoke(delegate
-                {
-                    if (!ok)
-                    {
-                        EnterResult(false, "ASUS hardware interface not found", msg);
-                        return;
-                    }
-#if MODE_STANDARD
-                    if (_autoMode)
-                    {
-                        // --auto: apply everything (all optimizations on) with
-                        // no tray app closing and no selection stage.
-                        Log.Info("UI: --auto given, applying right away");
-                        BeginApply();
-                        return;
-                    }
-                    EnterSelect(msg);
-#else
-                    if (!_confirmMode)
-                    {
-                        // One-click: flow straight from probing into applying.
-                        Log.Info("UI: one-click mode, applying right away");
-                        BeginApply();
-                        return;
-                    }
-                    EnterConfirm(msg);
-#endif
-                });
-            });
-        }
-
-        private void EnterConfirm(string precheckText)
-        {
-            _phase = UiPhase.Confirm;
-            _bar.Active = false;
-            HideAllButtons();
-            _apply.Text = "Apply";
-            _apply.Visible = true;
-            _cancel.Visible = true;
-            _status.ForeColor = Color.FromArgb(235, 235, 240);
-            _status.Text = "Ready to apply " + (TargetEco ? "Eco Mode" : "Standard mode");
-            _detail.Text = precheckText + "\n\n" +
-                "Switching applies immediately and is reversible -\n" +
-                "run the other app to switch back.";
-            Log.Info("UI: waiting for Apply");
-        }
-
-#if MODE_STANDARD
-        // Selection stage: every toggle group is shown at launch and the user
-        // decides what GO applies. The v1.1 stage adds the performance and
-        // storage-cleanup groups, named profiles and the live monitor, all
-        // inside one scrollable panel (the form grows to make room and
-        // AutoScroll covers short screens).
-        private void EnterSelect(string precheckText)
-        {
-            _phase = UiPhase.Confirm;
-            _bar.Active = false;
-            HideAllButtons();
-            GrowForSelection();
-            _detail.Visible = false;
-            _detail.Text = "";
-            _apply.Text = "GO";
-            _apply.Visible = true;
-            _cancel.Visible = true;
-            _status.ForeColor = Color.FromArgb(235, 235, 240);
-            _status.Text = "Ready - choose optimizations, then press GO";
-            LayoutSelectContent(precheckText);
-            SetSelectGroupsVisible(true);
-            _selectPanel.Visible = true;   // v1.1.1: created hidden in the ctor and never shown here - the whole stage was invisible, so GO was unreachable
-            EnsureMonitorEngine();
-            _monitorPanel.AttachToEngine();
-            StartMeasureOnce();
-            BeginTrayDetect();
-            Log.Info("UI: selection stage");
-        }
-
-        // The 640-high window cannot fit the v1.1 selection stage; grow once
-        // (clamped to the working area - the panel scrolls if still short).
-        // The width grows too: the ProfileBar strip needs ~530 px, more than
-        // the 512 px the 560-wide window offered.
-        private void GrowForSelection()
-        {
-            int wantH = 880;
-            int wantW = 600;
-            Rectangle wa = Screen.FromControl(this).WorkingArea;
-            if (wantH > wa.Height - 40) wantH = wa.Height - 40;
-            if (wantH < ClientSize.Height) wantH = ClientSize.Height;   // never shrink
-            if (wantW > wa.Width - 40) wantW = ClientSize.Width;        // narrow screens keep the old width
-            ClientSize = new Size(wantW, wantH);
-            _detail.Size = new Size(ClientSize.Width - 48, Math.Max(170, ClientSize.Height - 368 - 96));
-            Location = new Point(
-                wa.Left + Math.Max(0, (wa.Width - Width) / 2),
-                wa.Top + Math.Max(0, (wa.Height - Height) / 2));
-        }
-
-        // Lays the selection panel out top-to-bottom (once per run; the
-        // app-cache checkboxes are created here because the installed-target
-        // list is cheap to resolve, while the measured sizes arrive
-        // asynchronously via ApplyMeasurements).
-        private void LayoutSelectContent(string precheckText)
-        {
-            if (_selectLaidOut) return;
-            _selectLaidOut = true;
-
-            const int x2 = 276;      // right checkbox column (mirrors the v1.0.22 spots)
-            int pw = ClientSize.Width - 48;
-
-            _selectPanel.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            _selectPanel.Location = new Point(24, 150);
-            _selectPanel.Size = new Size(pw, ClientSize.Height - 150 - 62);
-
-            int y = 2;
-            _profileBar.Size = new Size(pw, 44);
-            _profileBar.Location = new Point(0, y);
-            y += 50;
-
-            _precheckLabel.Text = precheckText == null ? "" : precheckText;
-            int ph = MeasureWrappedHeight(_precheckLabel.Text, pw);
-            _precheckLabel.SetBounds(0, y, pw, ph);
-            y += ph + 10;
-
-            // System optimizations (v1.0.22 group, ticked by default).
-            _optTitle.Location = new Point(0, y); y += 24;
-            y = PlacePair(_optBoxes[0], _optBoxes[1], y);
-            y = PlacePair(_optBoxes[2], _optBoxes[3], y);
-            _optBoxes[4].SetBounds(0, y, 0, 0, BoundsSpecified.Location);
-            y += 30;
-
-            // Tray apps detected (v1.0.22 group).
-            _trayTitle.Location = new Point(0, y); y += 24;
-            y = PlacePair(_trayBoxes[0], _trayBoxes[1], y);
-            y = PlacePair(_trayBoxes[2], _trayBoxes[3], y);
-            _trayBoxes[4].SetBounds(0, y, 0, 0, BoundsSpecified.Location);
-            _closeTray.SetBounds(x2, y - 2, 150, 26);
-            y += 32;
-
-            // Performance (v1.1): freeze / plan / WU pause, "Edit list..." on
-            // the freeze row.
-            _perfTitle.Location = new Point(0, y); y += 24;
-            _freezeBox.SetBounds(0, y, 0, 0, BoundsSpecified.Location);
-            _editFreezeList.SetBounds(x2, y - 2, 110, 25);
-            y += 28;
-            y = PlacePair(_planBox, _wuPauseBox, y);
-            y += 6;
-
-            // Storage cleanup (v1.1): fixed boxes, then one checkbox per
-            // installed app-cache target whose cache dirs resolved non-empty.
-            _cleanTitle.Location = new Point(0, y); y += 24;
-            y = PlacePair(_cleanWuBox, _cleanDismBox, y);
-            y = PlacePair(_cleanDeepBox, _cleanGpuBox, y);
-
-            _appCacheBoxes.Clear();
-            List<AppCacheTarget> targets = AppCacheCleaner.Targets();
-            for (int i = 0; i < targets.Count; i++)
-            {
-                AppCacheTarget t = targets[i];
-                if (t.CacheDirs == null || t.CacheDirs.Length == 0) continue;
-                CheckBox cb = MakeSelectCheckBox("Clean " + t.Name + " cache", false);
-                cb.Tag = "clean.appcache." + t.Name;    // stable profile key
-                cb.Name = t.Name;                       // target name for the clean step
-                _appCacheBoxes.Add(cb);
-                _selectPanel.Controls.Add(cb);
-            }
-            for (int i = 0; i < _appCacheBoxes.Count; i++)
-            {
-                int row = i / 2, col = i % 2;
-                _appCacheBoxes[i].SetBounds(col == 0 ? 0 : x2, y + row * 26, 0, 0, BoundsSpecified.Location);
-            }
-            y += ((_appCacheBoxes.Count + 1) / 2) * 26 + 4;
-
-            // Gate warning + report-only note go right under the cleanup
-            // group; their text arrives with the background measurement.
-            _cleanGroupEndY = y;
-            LayoutMonitorSectionAt(y);
-        }
-
-        private static int PlacePair(CheckBox left, CheckBox right, int y)
-        {
-            left.SetBounds(0, y, 0, 0, BoundsSpecified.Location);
-            if (right != null) right.SetBounds(276, y, 0, 0, BoundsSpecified.Location);
-            return y + 26;
-        }
-
-        private int MeasureWrappedHeight(string text, int width)
-        {
-            if (string.IsNullOrEmpty(text)) return 0;
-            Size s = TextRenderer.MeasureText(text, Font, new Size(width, 100000), TextFormatFlags.WordBreak);
-            return Math.Max(18, s.Height + 2);
-        }
-
-        // The monitor section is the last thing in the panel; it moves down
-        // whenever a gate warning / report-only note appears under the
-        // cleanup group.
-        private void LayoutMonitorSectionAt(int y)
-        {
-            int pw = _selectPanel.Width;
-            _monitorToggle.SetBounds(0, y, 180, 22);
-            _monitorPanel.SetBounds(0, y + 26, Math.Min(pw, 400), 195);
-        }
-
-        private void ReflowInfoLabels()
-        {
-            int pw = _selectPanel.Width;
-            int yy = _cleanGroupEndY;
-            if (_oldLabel.Text.Length > 0)
-            {
-                int h = MeasureWrappedHeight(_oldLabel.Text, pw);
-                _oldLabel.SetBounds(0, yy, pw, h);
-                yy += h + 2;
-            }
-            if (_gateLabel.Text.Length > 0)
-            {
-                int h = MeasureWrappedHeight(_gateLabel.Text, pw);
-                _gateLabel.SetBounds(0, yy, pw, h);
-                yy += h + 4;
-            }
-            LayoutMonitorSectionAt(yy);
-        }
-
-        private static string SizeSuffix(long bytes)
-        {
-            return bytes > 0 ? " (" + StorageCleaner.FormatBytes(bytes) + ")" : "";
-        }
-
-        private static long SumBytes(List<CleanCategory> cats, string kind)
-        {
-            long sum = 0;
-            if (cats == null) return 0;
-            foreach (CleanCategory c in cats)
-            {
-                if (c.Kind == kind) sum += c.Bytes;
-            }
-            return sum;
-        }
-
-        // Background measurement (the RunBg pattern) - strictly read-only.
-        // When it lands: checkbox captions get their measured sizes, gate
-        // reasons disable the whole cleanup group with the reasons shown,
-        // and the report-only previous-installations note appears (D3 Tier 3).
+        // Background measurement (strictly read-only, the RunBg pattern): when
+        // it lands, switches get their measured sizes and gate reasons lock
+        // the whole cleanup card with the reasons shown in an amber banner.
         private void StartMeasureOnce()
         {
             if (_measureStarted) return;
@@ -1817,8 +2022,6 @@ namespace GpuModeSwitch
                 List<CleanCategory> tier1 = new List<CleanCategory>();
                 foreach (CleanCategory c in all)
                 {
-                    // GPU shader-cache paths are measured again by their
-                    // owner (GpuTools, D9) - keep the tier-1 kinds here.
                     if (c.Kind != CleanCategory.KindGpu) tier1.Add(c);
                 }
                 List<CleanCategory> deep = DeepClean.Measure();
@@ -1854,12 +2057,29 @@ namespace GpuModeSwitch
             });
         }
 
+        private static string SizeSuffix(long bytes)
+        {
+            return bytes > 0 ? " (" + StorageCleaner.FormatBytes(bytes) + ")" : "";
+        }
+
+        private static long SumBytes(List<CleanCategory> cats, string kind)
+        {
+            long sum = 0;
+            if (cats == null) return 0;
+            foreach (CleanCategory c in cats)
+            {
+                if (c.Kind == kind) sum += c.Bytes;
+            }
+            return sum;
+        }
+
         private void ApplyMeasurements(List<CleanCategory> tier1, List<CleanCategory> deep,
             List<CleanCategory> gpu, List<CleanCategory> app, List<string> runningTargets,
             List<string> gates)
         {
             _tier1Measured = tier1;
             _gateReasons = gates;
+            EnsureAppCacheSwitches();
 
             _cleanWuBox.Text = "Windows Update cache purge" + SizeSuffix(SumBytes(tier1, CleanCategory.KindWu));
 
@@ -1874,15 +2094,13 @@ namespace GpuModeSwitch
             long shaderBytes = 0;
             foreach (CleanCategory c in gpu)
             {
-                // Driver installer leftovers are confirm-flagged and not part
-                // of this checkbox - only the shader-cache paths count here.
                 if (c.Name.IndexOf("shader cache", StringComparison.OrdinalIgnoreCase) >= 0) shaderBytes += c.Bytes;
             }
             _cleanGpuBox.Text = "GPU shader caches" + SizeSuffix(shaderBytes);
 
-            foreach (CheckBox cb in _appCacheBoxes)
+            foreach (ToggleSwitch sw in _appCacheBoxes)
             {
-                string name = cb.Name;
+                string name = sw.Name;
                 long bytes = 0;
                 bool running = false;
                 foreach (CleanCategory c in app)
@@ -1893,61 +2111,51 @@ namespace GpuModeSwitch
                 {
                     if (string.Equals(rn, name, StringComparison.OrdinalIgnoreCase)) running = true;
                 }
-                cb.Text = "Clean " + name + " cache" + SizeSuffix(bytes) + (running ? " (app running)" : "");
-                if (running) cb.Checked = false;    // a running app starts UNchecked
+                sw.Text = "Clean " + name + " cache" + SizeSuffix(bytes) + (running ? " (app running)" : "");
+                if (running) sw.Checked = false;    // a running app starts UNchecked
             }
 
-            // Report-only previous Windows installations (D3 Tier 3): shown
-            // as information, never offered for deletion.
             foreach (CleanCategory c in deep)
             {
                 if (c.Name == DeepClean.CatPreviousInstallations && c.Bytes > 0)
                 {
                     _oldLabel.Text = "also found: previous Windows installations " +
                         StorageCleaner.FormatBytes(c.Bytes) + " (report only - never deleted)";
+                    _oldLabel.Visible = true;
                 }
             }
 
-            // D7 gates: any block reason disables the whole cleanup group and
-            // shows why. The cleaners re-check the gates themselves at GO
-            // time (belt and braces).
+            // D7 gates: any block reason locks the whole cleanup card with the
+            // reasons in a visible amber banner - locked rows show a lock glyph
+            // (v1.1.1 field report: grayed-out boxes with no reason read as
+            // "the app is broken"). The cleaners re-check the gates at GO.
             if (gates != null && gates.Count > 0)
             {
-                _gateLabel.Text = "Cleanup unavailable: " + string.Join("; ", gates.ToArray());
+                _gateLabel.Text = "LOCKED - cleanup unavailable right now: " + string.Join("; ", gates.ToArray());
+                _gateLabel.Visible = true;
                 _cleanWuBox.Enabled = false;
                 _cleanDismBox.Enabled = false;
                 _cleanDeepBox.Enabled = false;
                 _cleanGpuBox.Enabled = false;
-                foreach (CheckBox cb in _appCacheBoxes) cb.Enabled = false;
+                foreach (ToggleSwitch sw in _appCacheBoxes) sw.Enabled = false;
                 foreach (string reason in gates) Log.Warn("cleanup gate: " + reason);
             }
 
-            ReflowInfoLabels();
+            LayoutOptimize();
         }
-#endif
 
-        private void BeginApply()
+        // ---- apply: Go Time ----------------------------------------------------
+
+        private void BeginGoApply()
         {
-            if (_phase != UiPhase.Confirm && _phase != UiPhase.Probe) return;
+            if (_phase != UiPhase.Optimize && _phase != UiPhase.Probe) return;
             _phase = UiPhase.Applying;
-            HideAllButtons();
-            _bar.Active = true;
-            _bar.Visible = true;
-            _status.ForeColor = Color.FromArgb(235, 235, 240);
-            _status.Text = "Applying " + (TargetEco ? "Eco Mode" : "Standard mode") + "...";
-            _detail.Text = "";
-            Log.Info("UI: applying");
-            System.Diagnostics.Stopwatch goWatch = System.Diagnostics.Stopwatch.StartNew();
+            SetNavEnabled(false);
+            ShowBusy("Applying GO TIME...", true);
 
-#if MODE_STANDARD
             // Capture the launch-time selections (UI thread).
-            //
-            // --auto semantics (unchanged since v1.0.22): --auto applies ONLY
-            // the system optimizations + tray-app closing + GPU switch. The
-            // v1.1 performance and storage-cleanup groups are NEVER applied
-            // via --auto - freezing other apps' processes, switching power
-            // plans, pausing Windows Update and deleting files must never
-            // happen unattended (documented in README.md).
+            // --auto semantics (unchanged): ONLY the system optimizations + GPU
+            // switch; the performance and cleanup groups never run unattended.
             bool sessionFeatures = !_autoMode;
             List<TrayAppInfo> toClose = GatherSelectedTrayApps();
             bool fGameMode = _optBoxes[0].Checked;
@@ -1966,29 +2174,25 @@ namespace GpuModeSwitch
             List<string> cleanApps = new List<string>();
             if (sessionFeatures && gatesClear)
             {
-                foreach (CheckBox cb in _appCacheBoxes)
+                foreach (ToggleSwitch sw in _appCacheBoxes)
                 {
-                    if (cb.Checked) cleanApps.Add(cb.Name);
+                    if (sw.Checked) cleanApps.Add(sw.Name);
                 }
             }
-            _selectPanel.Visible = false;
-            _detail.Visible = false;
             Log.Info("UI: selections - GameMode=" + fGameMode + " DND=" + fDnd + " DVR=" + fDvr +
                         " Throttle=" + fThrottle + " Services=" + fServices + " TrayToClose=" + toClose.Count +
                         " Freeze=" + pFreeze + " Plan=" + pPlan + " WUPause=" + pWuPause +
                         " Cleanup(WU=" + cWu + " DISM=" + cDism + " Deep=" + cDeep + " GPU=" + cGpu +
                         " AppCaches=" + cleanApps.Count + ")");
-#endif
 
+            System.Diagnostics.Stopwatch goWatch = System.Diagnostics.Stopwatch.StartNew();
             RunBg(delegate
             {
-#if MODE_STANDARD
                 foreach (TrayAppInfo a in toClose) TrayApps.Close(a);
-#endif
                 SwitchOutcome r;
                 try
                 {
-                    r = AsusControl.SwitchTo(TargetEco);
+                    r = AsusControl.SwitchTo(false);
                 }
                 catch (Exception ex)
                 {
@@ -1997,13 +2201,6 @@ namespace GpuModeSwitch
                     r.Headline = "Unexpected error";
                     r.Detail = ex.Message + "\n\nFull details: View log.";
                 }
-#if MODE_ECO
-                // Eco-safe restore (belt and braces, v1.1): make sure no
-                // earlier Go Time session leaves frozen processes, a foreign
-                // power plan or a paused Windows Update behind.
-                SessionSafety.RestoreAll();
-#endif
-#if MODE_STANDARD
                 string prep = "";
                 string cleanupSummary = "";
                 if (r.Ok)
@@ -2013,14 +2210,12 @@ namespace GpuModeSwitch
                 }
                 if (r.Ok && sessionFeatures)
                 {
-                    GoExtraResult extra = RunGoSession(pFreeze, pPlan, pWuPause,
-                        cWu, cDism, cDeep, cGpu, cleanApps);
+                    GoExtraResult extra = RunGoSession(pFreeze, pPlan, pWuPause, cWu, cDism, cDeep, cGpu, cleanApps);
                     if (extra.DetailLines.Length > 0) r.Detail += extra.DetailLines;
                     cleanupSummary = extra.CleanupBlock;
 
-                    // Session history (A15): record the whole GO run.
                     SessionRecord rec = new SessionRecord();
-                    rec.App = "Go Time";
+                    rec.App = "GPU Mode Switch";
                     rec.Mode = "Standard";
                     rec.ActionsApplied = new List<string>();
                     rec.ActionsApplied.Add("GPU switch: " + r.Headline);
@@ -2035,21 +2230,80 @@ namespace GpuModeSwitch
                         : "");
                     SessionHistory.Append(rec);
                 }
-#endif
+                string sumCopy = cleanupSummary;
                 SafeInvoke(delegate
                 {
-#if MODE_STANDARD
-                    _cleanupSummary = cleanupSummary;
-                    if (r.Ok && sessionFeatures) AfterGoSuccess();
-#endif
+                    _cleanupSummary = sumCopy;
+                    _currentEco = false;
+                    _esOn = false;
+                    if (r.Ok && sessionFeatures) AfterGoSession();
                     EnterResult(r.Ok, r.Headline, r.Detail, r);
                 });
             });
         }
 
-#if MODE_STANDARD
-        // Everything RunGoSession collected for the session record and the
-        // result UI.
+        // ---- apply: Eco --------------------------------------------------------
+
+        private void EnterEcoConfirm()
+        {
+            _phase = UiPhase.Confirm;
+            SetNavEnabled(false);
+            _busy.Visible = true;
+            _spin.Visible = false;
+            _busyGlyph.Visible = false;
+            _busyTitle.Text = "Switch to ECO MODE?";
+            _busyText.Visible = true;
+            _busyText.Text = "The dGPU powers off completely (battery friendly, silent).\n" +
+                "Energy Saver engages silently; any GO session state (frozen apps,\n" +
+                "power plan, paused Windows Update) is restored.\n\n" +
+                "Reversible at any time - press GO TIME on Home to switch back.";
+            ShowResultButtons(false, false);
+            _confirmApplyBtn.Visible = true;
+            _confirmCancelBtn.Visible = true;
+            _status.Text = "Ready to apply Eco Mode";
+            Log.Info("UI: waiting for Apply (eco)");
+        }
+
+        private void BeginEcoApply()
+        {
+            if (_phase == UiPhase.Applying) return;
+            _phase = UiPhase.Applying;
+            SetNavEnabled(false);
+            ShowBusy("Applying ECO MODE...", true);
+            Log.Info("UI: applying (eco)");
+
+            RunBg(delegate
+            {
+                SwitchOutcome r;
+                try
+                {
+                    r = AsusControl.SwitchTo(true);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("UNEXPECTED ERROR", ex);
+                    r = new SwitchOutcome();
+                    r.Headline = "Unexpected error";
+                    r.Detail = ex.Message + "\n\nFull details: View log.";
+                }
+                // Eco-safe restore (belt and braces): make sure no earlier GO
+                // session leaves frozen processes, a foreign power plan or a
+                // paused Windows Update behind.
+                SessionSafety.RestoreAll();
+                SwitchOutcome ro = r;
+                SafeInvoke(delegate
+                {
+                    _currentEco = true;
+                    _esOn = true;
+                    DisposeOverlay();
+                    try { if (MonitorEngine.Running) MonitorEngine.Stop(); } catch { }
+                    EnterResult(ro.Ok, ro.Headline, ro.Detail, ro);
+                });
+            });
+        }
+
+        // ---- GO session features (v1.1 chain, unchanged semantics) -------------
+
         private sealed class GoExtraResult
         {
             public List<string> Actions = new List<string>();
@@ -2061,20 +2315,11 @@ namespace GpuModeSwitch
             public string CleanupBlock = "";
         }
 
-        // Runs the v1.1 session features after the GPU switch + optimizations
-        // succeeded, in this order: freeze -> power plan -> WU pause ->
-        // cleanup (Tier 1 -> DISM -> deep -> GPU caches -> app caches). Every
-        // step is individually try/caught, logged, and never aborts the run;
-        // the GPU switch result stays the headline. Unticked reversible
-        // features are actively restored (the v1.0.22 "unticked is restored"
-        // semantic). Runs on the GO background thread; the cleaners re-check
-        // the D7 gates themselves.
         private GoExtraResult RunGoSession(bool pFreeze, bool pPlan, bool pWuPause,
             bool cWu, bool cDism, bool cDeep, bool cGpu, List<string> cleanApps)
         {
             GoExtraResult outc = new GoExtraResult();
 
-            // a) background process freezer (A12)
             if (pFreeze)
             {
                 try
@@ -2096,7 +2341,6 @@ namespace GpuModeSwitch
                 ProcessFreezer.ResumeAllSafe();     // unticked = actively restored
             }
 
-            // b) Ultimate Performance plan (A13)
             if (pPlan)
             {
                 try
@@ -2124,7 +2368,6 @@ namespace GpuModeSwitch
                 PowerPlans.RestorePrevious();       // unticked = actively restored
             }
 
-            // c) session-scoped Windows Update pause (A13)
             if (pWuPause)
             {
                 try
@@ -2145,7 +2388,6 @@ namespace GpuModeSwitch
                 WuPause.ResumeUpdates();            // unticked = actively restored
             }
 
-            // d) cleanup chain (A7/A8/A9/A10/A11)
             bool anyCleanup = cWu || cDism || cDeep || cGpu ||
                 (cleanApps != null && cleanApps.Count > 0);
             if (!anyCleanup) return outc;
@@ -2158,9 +2400,6 @@ namespace GpuModeSwitch
                 return outc;
             }
 
-            // d1) Tier 1 (StorageCleaner, A7): the WU-kind categories when the
-            // WU box is ticked, the tier-1 deepclean-kind categories (temp,
-            // WER, user temp, crash dumps, thumbnails) with the deep box.
             if (cWu || cDeep)
             {
                 List<CleanCategory> sel = new List<CleanCategory>();
@@ -2191,7 +2430,6 @@ namespace GpuModeSwitch
                 }
             }
 
-            // d2) DISM component store (A8) - analyzes first itself (D3).
             if (cDism)
             {
                 try
@@ -2218,8 +2456,6 @@ namespace GpuModeSwitch
                 }
             }
 
-            // d3) deep clean (A10) - fresh measure, the report-only category
-            // is never selected (D3 Tier 3).
             if (cDeep)
             {
                 try
@@ -2248,8 +2484,6 @@ namespace GpuModeSwitch
                 }
             }
 
-            // d4) GPU shader caches (A11) - driver leftovers stay (the
-            // confirm flag is deliberately not offered in the default flow).
             if (cGpu)
             {
                 try
@@ -2269,8 +2503,6 @@ namespace GpuModeSwitch
                 }
             }
 
-            // d5) per-app caches (A9, CACHE-ONLY per D5). The cleaner skips
-            // and warns for any target whose app is running.
             if (cleanApps != null && cleanApps.Count > 0)
             {
                 try
@@ -2296,7 +2528,6 @@ namespace GpuModeSwitch
                 }
             }
 
-            // Result-stage summary block (compact: capped category lines).
             StringBuilder sb = new StringBuilder();
             sb.Append("Storage cleanup: ").Append(outc.TotalFreed > 0
                 ? StorageCleaner.FormatBytes(outc.TotalFreed) + " freed"
@@ -2317,7 +2548,6 @@ namespace GpuModeSwitch
             return outc;
         }
 
-        // Merges one cleaner's results into the record + summary block.
         private static void CollectCleanResults(GoExtraResult outc, List<CleanResult> res)
         {
             if (res == null) return;
@@ -2330,22 +2560,24 @@ namespace GpuModeSwitch
             }
         }
 
-        // The GO session is active: this form owns the one MonitorEngine for
-        // the whole session (D6) and the session tray (D4) is created with
-        // its five callbacks.
-        private void AfterGoSuccess()
+        // ---- session tray + overlay --------------------------------------------
+
+        // The GO session is active: this form owns the one MonitorEngine (D6)
+        // and the session tray (D4) with its five callbacks. In the unified
+        // app the tray's eco item is the full eco switch (in-process).
+        private void AfterGoSession()
         {
             EnsureMonitorEngine();
             if (_tray != null) return;
             _tray = new SessionTray(
                 delegate { Show(); Activate(); },           // open window
-                BeginEcoRestore,                            // restore (eco-safe)
+                BeginEcoApply,                              // "Go Eco" = full switch + restore
                 ToggleOverlay,                              // overlay toggle
                 SessionStatusText,                          // status balloon text
                 BeginExitApp);                              // clean shutdown
             SessionSafety.ActiveTray = _tray;
-            _tray.Show("Go Time session active");
-            Log.Chan("TRAY", "session tray created (Go Time session active)");
+            _tray.Show("GO session active");
+            Log.Chan("TRAY", "session tray created (GO session active)");
         }
 
         private void EnsureMonitorEngine()
@@ -2353,39 +2585,6 @@ namespace GpuModeSwitch
             if (!MonitorEngine.Running) MonitorEngine.Start(2000);
         }
 
-        // Tray "Restore (Eco Mode)": the eco-safe session restore (see
-        // SessionSafety) - background apps resumed, previous power plan back,
-        // Windows Update resumed, tray gone. Switching the GPU to Eco itself
-        // stays Eco Mode.exe's one-click job (D4: the suite stays two exes).
-        private void BeginEcoRestore()
-        {
-            RunBg(delegate
-            {
-                SessionSafety.RestoreAll();
-                SafeInvoke(delegate
-                {
-                    _tray = null;
-                    DisposeOverlay();
-                    try { if (MonitorEngine.Running) MonitorEngine.Stop(); } catch { }
-                    _phase = UiPhase.Result;
-                    HideAllButtons();
-                    _bar.Active = false;
-                    _bar.Visible = false;
-                    _status.Text = "Session restored";
-                    _status.ForeColor = Color.FromArgb(76, 195, 138);
-                    _detail.Visible = true;
-                    _detail.Text = "Background apps resumed, previous power plan restored, " +
-                        "Windows Update resumed.\n\nTo switch the GPU to Eco, run Eco Mode.exe.";
-                    _logBtn.Visible = true;
-                    _histBtn.Visible = true;
-                    _sessBtn.Visible = true;
-                    _close.Visible = true;
-                    Log.Info("UI: session restored to the eco-safe state");
-                });
-            });
-        }
-
-        // Tray "Exit": eco-safe restore first, then close for good.
         private void BeginExitApp()
         {
             RunBg(delegate
@@ -2426,8 +2625,6 @@ namespace GpuModeSwitch
             _overlay = null;
         }
 
-        // One-line status for the tray balloon: GPU state (from
-        // AsusControl.DescribeState) + the latest live monitor sample.
         private string SessionStatusText()
         {
             string gpuLine = "";
@@ -2454,40 +2651,32 @@ namespace GpuModeSwitch
             return status;
         }
 
-        // ProfileBar (A14): gather every keyed checkbox. Keys are the stable
-        // Tag values set at construction (opt.*, tray.*, perf.*, clean.*).
+        // ---- profiles -------------------------------------------------------------
+
         private Dictionary<string, bool> CollectAllSelections()
         {
             Dictionary<string, bool> map = new Dictionary<string, bool>();
-            foreach (Control c in _selectPanel.Controls)
-            {
-                CheckBox cb = c as CheckBox;
-                if (cb == null || cb.Tag == null) continue;
-                map[(string)cb.Tag] = cb.Checked;
-            }
+            AppendSelections(_optScroll, map);
+            AppendSelections(_busy, map);
             return map;
         }
 
-        // ProfileBar Apply: set every checkbox by key. Unknown keys are
-        // ignored with a log line; disabled (gate-blocked) cleanup boxes are
-        // left alone - a saved profile must not resurrect a cleanup the
-        // safety gates refused.
+        private static void AppendSelections(Control root, Dictionary<string, bool> map)
+        {
+            foreach (Control c in root.Controls)
+            {
+                ToggleSwitch sw = c as ToggleSwitch;
+                if (sw == null || sw.Tag == null) continue;
+                map[(string)sw.Tag] = sw.Checked;
+            }
+        }
+
         private void ApplyProfileSelections(string name, Dictionary<string, bool> selections)
         {
             if (selections == null) return;
             foreach (KeyValuePair<string, bool> kv in selections)
             {
-                CheckBox target = null;
-                foreach (Control c in _selectPanel.Controls)
-                {
-                    CheckBox cb = c as CheckBox;
-                    if (cb != null && cb.Tag != null &&
-                        string.Equals((string)cb.Tag, kv.Key, StringComparison.Ordinal))
-                    {
-                        target = cb;
-                        break;
-                    }
-                }
+                ToggleSwitch target = FindSwitchByTag(kv.Key);
                 if (target == null)
                 {
                     Log.Chan("PROFILE", "profile apply: unknown key '" + kv.Key + "' ignored");
@@ -2495,7 +2684,7 @@ namespace GpuModeSwitch
                 }
                 if (!target.Enabled)
                 {
-                    Log.Chan("PROFILE", "profile apply: '" + kv.Key + "' is disabled (safety gates) - left unchanged");
+                    Log.Chan("PROFILE", "profile apply: '" + kv.Key + "' is locked (safety gates) - left unchanged");
                     continue;
                 }
                 target.Checked = kv.Value;
@@ -2503,54 +2692,176 @@ namespace GpuModeSwitch
             Log.Chan("PROFILE", "profile applied: " + name);
         }
 
-        private List<TrayAppInfo> GatherSelectedTrayApps()
+        private ToggleSwitch FindSwitchByTag(string tag)
         {
-            List<TrayAppInfo> list = new List<TrayAppInfo>();
-            for (int i = 0; i < TrayApps.Known.Length && i < _trayBoxes.Count; i++)
-            {
-                if (_trayBoxes[i].Checked && TrayApps.Known[i].Running) list.Add(TrayApps.Known[i]);
-            }
-            return list;
+            ToggleSwitch t = FindSwitchIn(_optScroll, tag);
+            if (t != null) return t;
+            return FindSwitchIn(_busy, tag);
         }
-#endif
 
-        private void EnterResult(bool ok, string headline, string detail)
+        private static ToggleSwitch FindSwitchIn(Control root, string tag)
         {
-            EnterResult(ok, headline, detail, null);
+            foreach (Control c in root.Controls)
+            {
+                ToggleSwitch sw = c as ToggleSwitch;
+                if (sw != null && sw.Tag != null &&
+                    string.Equals((string)sw.Tag, tag, StringComparison.Ordinal))
+                {
+                    return sw;
+                }
+            }
+            return null;
+        }
+
+        // ---- busy / result ----------------------------------------------------------
+
+        private void ShowBusy(string title, bool spinner)
+        {
+            _busy.Visible = true;
+            // (z fixed at construction: busy is above the sections, below the header strip)
+            _spin.Visible = spinner;
+            _busyGlyph.Visible = false;
+            _busyTitle.Text = title;
+            _busyTitle.ForeColor = Ui.TextHi;
+            _busyText.Visible = false;
+            _resultTrayAvailable = false;
+            _resTrayTitle.Visible = false;
+            _resTrayClose.Visible = false;
+            ShowResultButtons(false, false);
+            _confirmApplyBtn.Visible = false;
+            _confirmCancelBtn.Visible = false;
+            _bar.Visible = true;
+            _bar.Active = true;
+            _status.Text = title;
+            LayoutBusy();
+        }
+
+        private void ShowResultButtons(bool resultButtons, bool restart)
+        {
+            _resLogBtn.Visible = resultButtons;
+            _resHistBtn.Visible = resultButtons;
+            _resSessBtn.Visible = resultButtons;
+            _resHomeBtn.Visible = resultButtons;
+            _resRestartBtn.Visible = resultButtons && restart;
         }
 
         private void EnterResult(bool ok, string headline, string detail, SwitchOutcome r)
         {
             _phase = UiPhase.Result;
             _last = r;
-            HideAllButtons();
-            _bar.Active = false;
-            _bar.Visible = false;
-            _detail.Visible = true;
-            _status.Text = (ok ? "OK - " : "Failed - ") + headline;
-            _status.ForeColor = ok ? _accent : Color.FromArgb(255, 120, 120);
-            _detail.Text = detail;
-#if MODE_STANDARD
+            SetNavEnabled(true);
+            UpdateStateUi();
+
+            _busy.Visible = true;
+            // (z fixed at construction)
+            _spin.Visible = false;
+            _busyGlyph.Visible = true;
+            if (Ui.HasGlyphs)
+            {
+                _busyGlyph.Text = ok ? "\uE73E" : "\uE7BA";       // check / warning
+            }
+            else
+            {
+                _busyGlyph.Text = ok ? "OK" : "!";
+            }
+            _busyGlyph.ForeColor = ok ? Ui.Eco : Ui.Red;
+            _busyTitle.Text = (ok ? "" : "Failed - ") + headline;
+            _busyTitle.ForeColor = ok ? Ui.TextHi : Ui.Red;
+
+            string text = detail == null ? "" : detail;
             if (_cleanupSummary.Length > 0)
             {
-                _detail.Text = detail + "\n\n" + _cleanupSummary;
+                text = text + "\n\n" + _cleanupSummary;
                 _cleanupSummary = "";
             }
-#endif
-            _logBtn.Visible = true;
-            _logBtn.FlatAppearance.BorderColor = ok ? Color.FromArgb(90, 90, 98) : _accent;
-            _close.Visible = true;
-#if MODE_STANDARD
-            _histBtn.Visible = true;
-            _sessBtn.Visible = true;
-#endif
-            if (r != null && r.Ok && r.NeedsRestart) _restart.Visible = true;
-#if MODE_STANDARD
-            EnterResultTraySection();
-#endif
+            _busyText.Visible = true;
+            _busyText.Text = text;
+            _bar.Visible = false;
+            _bar.Active = false;
+            _confirmApplyBtn.Visible = false;
+            _confirmCancelBtn.Visible = false;
+            ShowResultButtons(true, r != null && r.Ok && r.NeedsRestart);
+            _status.Text = (ok ? "OK - " : "Failed - ") + headline;
+
+            // v1.0.22 behavior kept: the tray picker stays available after a
+            // switch - in the unified app it lives in the result overlay.
+            _resultTrayAvailable = true;
+            _resTrayTitle.Visible = true;
+            _resTrayClose.Visible = true;
+            LayoutBusy();
+            BeginTrayDetect();
         }
 
-        // ---- plumbing ------------------------------------------------------
+        // ---- plumbing ------------------------------------------------------------
+
+        private static Bitmap LoadResourcePng(string name)
+        {
+            try
+            {
+                Stream s = typeof(Program).Assembly.GetManifestResourceStream(name);
+                if (s == null) return null;
+                using (Bitmap tmp = new Bitmap(s))
+                {
+                    return new Bitmap(tmp);   // detached copy; the stream can go away
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void OnClock(object sender, EventArgs e)
+        {
+            if (Opacity < 1) Opacity = Math.Min(1, Opacity + 0.07);
+            _bar.Advance();
+            if (_spin.Visible) _spin.Advance();
+        }
+
+        // Borderless window: the bare 6px frame resizes, any bare interior
+        // panel background drags (MakeDraggable).
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_NCHITTEST = 0x84;
+            const int HTCLIENT = 1;
+            const int HTLEFT = 10;
+            const int HTRIGHT = 11;
+            const int HTTOP = 12;
+            const int HTTOPLEFT = 13;
+            const int HTTOPRIGHT = 14;
+            const int HTBOTTOM = 15;
+            const int HTBOTTOMLEFT = 16;
+            const int HTBOTTOMRIGHT = 17;
+
+            if (m.Msg == WM_NCHITTEST)
+            {
+                base.WndProc(ref m);
+                if ((int)m.Result == HTCLIENT)
+                {
+                    int lp = m.LParam.ToInt32();
+                    Point pt = PointToClient(new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF)));
+                    int e = 8;
+                    bool l = pt.X <= e, r = pt.X >= ClientSize.Width - e;
+                    bool t = pt.Y <= e, b = pt.Y >= ClientSize.Height - e;
+                    if (t && l) m.Result = (IntPtr)HTTOPLEFT;
+                    else if (t && r) m.Result = (IntPtr)HTTOPRIGHT;
+                    else if (b && l) m.Result = (IntPtr)HTBOTTOMLEFT;
+                    else if (b && r) m.Result = (IntPtr)HTBOTTOMRIGHT;
+                    else if (l) m.Result = (IntPtr)HTLEFT;
+                    else if (r) m.Result = (IntPtr)HTRIGHT;
+                    else if (t) m.Result = (IntPtr)HTTOP;
+                    else if (b) m.Result = (IntPtr)HTBOTTOM;
+                }
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            Region = new Region(UiShapes.RoundRect(0, 0, ClientSize.Width, ClientSize.Height, 22));
+        }
 
         private void RunBg(ThreadStart work)
         {
@@ -2560,15 +2871,13 @@ namespace GpuModeSwitch
                 catch (Exception ex)
                 {
                     Log.Error("BACKGROUND ERROR", ex);
-#if MODE_STANDARD
-                    // Abnormal end of a background step (v1.1): eco-safe
-                    // restore so a half-applied session is never left behind.
+                    // Abnormal end of a background step: eco-safe restore so a
+                    // half-applied session is never left behind.
                     try { SessionSafety.RestoreAll(); } catch { }
-#endif
                     SafeInvoke(delegate
                     {
                         EnterResult(false, "Unexpected error",
-                            ex.Message + "\n\nFull details: View log.");
+                            ex.Message + "\n\nFull details: View log.", null);
                     });
                 }
             });
@@ -2596,22 +2905,6 @@ namespace GpuModeSwitch
             {
                 MessageBox.Show("Could not start a restart: " + ex.Message,
                     Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        [DllImport("dwmapi.dll")]
-        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
-
-        private void TryDarkTitleBar()
-        {
-            try
-            {
-                int on = 1;
-                DwmSetWindowAttribute(Handle, 20, ref on, 4);   // DWMWA_USE_IMMERSIVE_DARK_MODE
-            }
-            catch
-            {
-                // older Windows without dark title bars - not a problem
             }
         }
     }

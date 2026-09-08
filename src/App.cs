@@ -145,20 +145,20 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.1.1";
+        public const string Version = "1.2.0";
 
         [STAThread]
         private static void Main(string[] args)
         {
-#if MODE_ECO
-            Log.BeginSession("Eco Mode", Program.Version);
-#else
-            Log.BeginSession("Go Time", Program.Version);
-#endif
+            // v1.2.0: ONE app, both modes chosen at runtime (D10). The retired
+            // v1.x pair was Go Time.exe (MODE_STANDARD) + Eco Mode.exe
+            // (MODE_ECO); their flags still work: --gotime opens the Optimize
+            // deck, --eco switches to Eco (one-click unless --confirm).
+            Log.BeginSession("GPU Mode Switch", Program.Version);
 
-            // v1.1 last-resort hooks: log the failure and run the eco-safe
-            // restore so a crashing run never leaves a frozen process, a
-            // paused Windows Update or a foreign power plan behind.
+            // Last-resort hooks: log the failure and run the eco-safe restore
+            // so a crashing run never leaves a frozen process, a paused
+            // Windows Update or a foreign power plan behind.
             Application.ThreadException += delegate(object s, System.Threading.ThreadExceptionEventArgs e)
             {
                 Log.Error("UI THREAD EXCEPTION", e.Exception);
@@ -173,6 +173,8 @@ namespace GpuModeSwitch
             bool confirm = false;
             bool auto = false;
             bool statusOnly = false;
+            bool startGo = false;
+            bool startEco = false;
             if (args != null)
             {
                 foreach (string a in args)
@@ -180,25 +182,23 @@ namespace GpuModeSwitch
                     if (string.Equals(a, "--confirm", StringComparison.OrdinalIgnoreCase)) confirm = true;
                     if (string.Equals(a, "--auto", StringComparison.OrdinalIgnoreCase)) auto = true;
                     if (string.Equals(a, "--status", StringComparison.OrdinalIgnoreCase)) statusOnly = true;
+                    if (string.Equals(a, "--gotime", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(a, "--go", StringComparison.OrdinalIgnoreCase)) startGo = true;
+                    if (string.Equals(a, "--eco", StringComparison.OrdinalIgnoreCase)) startEco = true;
                 }
             }
 
             if (statusOnly)
             {
-#if MODE_ECO
-                MessageBox.Show(AsusControl.DescribeState(), "Eco Mode - status",
+                MessageBox.Show(AsusControl.DescribeState(), "GPU Mode Switch - status",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
-#else
-                MessageBox.Show(AsusControl.DescribeState(), "Go Time - status",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-#endif
                 Log.EndSession("status shown");
                 return;
             }
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(confirm, auto));
+            Application.Run(new MainForm(auto, confirm, startGo, startEco));
             Log.EndSession("main window closed");
         }
     }

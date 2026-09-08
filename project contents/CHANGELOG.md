@@ -7,6 +7,54 @@ renumbered or rewritten. Fuller prose for older versions lives in
 `README.md`; the authoritative code history is git; GitHub Releases carry
 the built executables.
 
+## v1.2.0 — 2026-09-07
+
+**THE SINGLE APP (owner decision D10): one executable, both modes.**
+`Go Time.exe` and `Eco Mode.exe` are retired — replaced by
+**`GPU Mode Switch.exe`**. Launch it and Home shows the current mode with
+two big cards: **GO TIME** (configure & launch the session) and
+**ECO MODE** (one click, silent). The compile-time MODE_STANDARD/MODE_ECO
+split is gone; the mode is chosen at runtime (cards, `--gotime` / `--eco`
+flags, or the session tray's "Go Eco"). Old flags still work (`--auto`,
+`--confirm`, `--status`). The session tray's eco item now performs the
+**full eco switch in-process** (switch + eco-safe restore).
+
+**The redesign — a proper command deck.**
+- **Sidebar rail** (Home / Optimize / Monitor / History) with Segoe glyph
+  icons — every section is viewable at any time.
+- **Home**: current-mode banner + two glowing mode cards with the app
+  emblems, taglines and action pills; the ACTIVE mode pulses.
+- **Optimize deck**: the Go Time selection stage rebuilt as rounded cards
+  with **animated toggle switches** (no more tiny checkboxes) — system
+  optimizations, tray apps, performance, storage cleanup. **Locked cleanup
+  now explains itself**: when the safety gates block, an amber banner
+  lists the reasons and the rows show a lock glyph (the v1.1.1 field
+  report: grayed-out untickable boxes read as "broken").
+- **Monitor page**: big live sensor grid + overlay toggle.
+- **History page**: current log viewer, searchable log history across every
+  run (old GoTime/EcoMode folders included), session history.
+- Busy/result overlay with spinner, result glyph, wrapped text and the
+  after-switch tray picker; borderless rounded window with fade-in kept.
+
+**Fixed**
+- **NetworkThrottlingIndex never actually turned off**: the HKLM write
+  passed a `uint` to `RegistryKey.SetValue` with `RegistryValueKind.Dword`
+  (which requires `int`) — every "network throttling off" threw a type
+  mismatch (visible in the 2026-09-07 field logs). Now writes `-1`
+  (0xFFFFFFFF) correctly.
+- Missing services (e.g. Fax not installed) now log "not installed -
+  skipped" instead of a failure.
+- **Known-issue UX from the v1.1.1 field report** ("bottom buttons can't
+  be toggled"): that was the D7 cleanup gates disabling rows with only a
+  small label — see the lock banner above.
+
+**Notes**
+- Logs now go to `logs\GpuModeSwitch\` (the v1.x GoTime/EcoMode folders
+  stay browsable in Log History). Version constant: `src/App.cs`.
+- WinForms note for the future: custom owner-drawn controls added early to
+  a shared strip never received WM_PAINT in this shell — the header uses
+  plain labels added last (documented in HANDBOOK §6 v1.2.0).
+
 ## v1.1.1 — 2026-09-07
 
 **Fixed**

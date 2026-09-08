@@ -1,9 +1,9 @@
-# Project contents — asus-gpu-mode-switch v1.1.1
+# Project contents — asus-gpu-mode-switch v1.2.0
 
 This folder is a self-contained bundle of the project's documents and
 history so the entire project can be reviewed from one place — on any
 machine, by any person or agent — without digging through branches or
-git tooling. Refreshed at every release (currently: **v1.1.1**,
+git tooling. Refreshed at every release (currently: **v1.2.0**,
 2026-09-07).
 
 | File | What it is |
@@ -23,28 +23,29 @@ git tooling. Refreshed at every release (currently: **v1.1.1**,
   that ships with Windows; no Visual Studio, no .NET SDK, no NuGet).
 - Living copies: `docs/HANDBOOK.md`, `docs/HANDOFF_v1.1.1.md`,
   `BUILD_NOTES.md`, `README.md`, `CHANGELOG.md`, `PORTABILITY.md` (the files
-  in this folder are snapshots of those, taken at the v1.1.1 release).
+  in this folder are snapshots of those, taken at the v1.2.0 release).
 - Build outputs land in `dist/` and are intentionally gitignored; the built
-  executables (`Go Time.exe`, `Eco Mode.exe`) are attached to the GitHub
-  **v1.1.1 release**.
+  executable (`GPU Mode Switch.exe`) is attached to the GitHub
+  **v1.2.0 release**.
 
 ## Publish state
 
-- `main` on the ryanthabot mirror carries the v1.1.1 release commit
-  (`0ac721b`), tag `v1.1.1`, and the GitHub Release with both exes; this
+- `main` on the ryanthabot mirror carries the v1.2.0 release commit, tag
+  `v1.2.0`, and the GitHub Release with `GPU Mode Switch.exe`; this
   bundle-refresh commit follows it.
-- bigthabot (the primary repo) still sits at the v1.1.0 tag pending a
-  one-command sync from a machine with bigthabot credentials:
-  `git pull https://github.com/ryanthabot/asus-gpu-mode-switch main && git push`.
+- bigthabot (the primary repo) still needs a one-command sync from a machine
+  with bigthabot credentials:
+  `git pull https://github.com/ryanthabot/asus-gpu-mode-switch main && git push`
+  (it is multiple releases behind: v1.1.1 + v1.2.0).
 
 ## Known issues
 
-- The v1.1.0 release blocker (invisible Go Time selection stage) and the
-  obtrusive Energy Saver Settings popup are **fixed in v1.1.1** — the full
-  root-cause story (including the corrected ESBATTTHRESHOLD GUID that makes
-  silent switching work on build 26200) is in `HANDOFF_v1.1.1.md` and the
-  v1.1.1 section of `BUILD_NOTES.md`; the release history is in
-  `CHANGELOG.md`.
-- OPEN: **v1.2.0** will merge the two executables into ONE app with both
-  modes inside (owner decision D10; design sketch in `HANDOFF_v1.1.1.md`
-  §7), pending the owner's confirmation of the final app name and icon.
+- The v1.1.0 blocker and the Energy Saver popup: fixed in v1.1.1. The
+  two-exe suite: replaced by the single `GPU Mode Switch.exe` in v1.2.0.
+  Full history in `CHANGELOG.md`; engineering notes in HANDBOOK section 6
+  and BUILD_NOTES.md.
+- OPEN (owner, on the G513QR): manual checklist items 14-18 in
+  BUILD_NOTES.md — Home cards, deck switches, GO, tray Go Eco, monitor
+  overlay. The gradient header title and pill chips were reverted to
+  plain labels after a WinForms paint quirk (documented in HANDBOOK
+  section 6, v1.2.0 entry); they can return as a v1.2.x polish item.

@@ -1,14 +1,31 @@
 # ASUS GPU Mode Switch — "Go Time" & "Eco Mode"
 
-Two one-click executables that switch the **GPU Mode** on ASUS laptops — the same
-Standard / Eco switch that lives in *Armoury Crate → Devices → System Settings →
-GPU Performance* — without opening Armoury Crate at all.
+**ONE app, both modes** (v1.2.0): **`GPU Mode Switch.exe`** switches the
+**GPU Mode** on ASUS laptops — the same Standard / Eco switch that lives in
+*Armoury Crate → Devices → System Settings → GPU Performance* — without
+opening Armoury Crate at all. Launch it and Home offers both modes; the old
+two-executable pair (Go Time.exe / Eco Mode.exe) is retired.
 
-| Executable | What it does |
+| Mode | What it does |
 |---|---|
-| **Go Time.exe** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path |
-| **Eco Mode.exe** | Eco GPU mode: the dGPU is completely powered off (battery / silence) |
+| **GO TIME** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path — configure the session on the Optimize page, then press GO |
+| **ECO MODE** | Eco GPU mode: the dGPU is completely powered off (battery / silence) — one click from Home |
 
+> **v1.2.0** — **the single app + full redesign**: ONE executable
+> (`GPU Mode Switch.exe`) with both modes inside — Home shows the current
+> mode and two glowing mode cards (GO TIME / ECO MODE, the active one
+> pulses); a sidebar rail (Home / Optimize / Monitor / History) makes every
+> section viewable; the Go Time selection stage is rebuilt with animated
+> toggle switches in rounded cards, and **locked cleanup now explains
+> itself** (amber banner with the gate reasons + lock glyphs — fixing the
+> v1.1.1 "can't toggle the bottom boxes" report, which was the safety
+> gates working); a live Monitor page and a History page (log viewer /
+> searchable log history / session history); the session tray's eco item
+> now performs the full eco switch in-process. Also fixed:
+> NetworkThrottlingIndex never actually turned off (a uint/int registry
+> type mismatch), and missing services (Fax) log "not installed" instead
+> of failing. Logs now write to `logs\GpuModeSwitch\`.
+>
 > **v1.1.1** — **the v1.1.0 blocker fixed + silent Energy Saver**: Go
 > Time's selection stage rendered empty (the stage panel was created hidden
 > and never shown — GO was unreachable, so the switch, optimizations,

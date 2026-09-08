@@ -1213,6 +1213,53 @@ commit hash); mark blocked with the reason. Add new rows at the bottom.
   - v1.2.0 (single-app merge, D10) intentionally NOT started — the owner
     wants the final app name/icon confirmed first.
 
+- **2026-09-07 — v1.2.0 (the single app + redesign) implemented, per the
+  owner's second field report and the D10 design.** One executable,
+  `GPU Mode Switch.exe`; the two-exe pair and the MODE_STANDARD/MODE_ECO
+  defines are gone (§2.6 fully superseded now; `build.cmd` compiles once,
+  three PNG resources, gotime.ico as the app icon — name/icon flagged as
+  changeable in the release notes).
+  - **New shell (Forms.cs MainForm rebuilt, Theme.cs Ui-kit)**: sidebar
+    rail (Home/Optimize/Monitor/History, Segoe glyph icons), gradient
+    header strip with live status labels, Home with two ModeCards (the
+    ACTIVE mode glows/pulses), the Optimize deck with rounded Cards and
+    animated ToggleSwitches, a Monitor page over MonitorPanel, a History
+    page, and a shared busy/result overlay (spinner, result glyph,
+    wrapped text, tray picker). Window 980x660 borderless, 6px bare frame
+    for edge-resize, bare panels drag via WM_NCLBUTTONDOWN.
+  - **Gate-locked cleanup explains itself** (the v1.1.1 "bottom buttons
+    can't be toggled" report was the D7 gates disabling rows): amber
+    "LOCKED" banner with the reasons + lock glyphs on the rows.
+  - **CLI**: --gotime (open the deck), --eco (one-click eco; --confirm
+    restores the review stage), --auto unchanged, --status. Session tray's
+    eco item = full in-process eco switch. Logs → logs\GpuModeSwitch\
+    (Logger.FolderFor extended; LogBrowser lists the folder; old
+    GoTime/EcoMode folders stay browsable). SessionHistory records App
+    "GPU Mode Switch".
+  - **Fixed from the field logs**: NetworkThrottlingIndex uint→int DWord
+    mismatch (the write never worked through v1.1.1 — GamePrep.SetHklmDword
+    now takes int, -1 = off); missing services (Fax) log "not installed -
+    skipped". AsusControl.DescribeState def-trap removed.
+  - **Verification**: integrated builds zero diagnostics (many iterations);
+    banned-syntax scan clean; UTF-16 scan of the exe (title, version,
+    LOCKED banner, tray strings, UNIFIED session tag all present). Visual
+    verification via an out-of-tree **no-manifest harness** (same sources,
+    asInvoker, temp dir) driven through screenshots + the accessibility
+    tree: probe failure path, Home (both cards, ECO ACTIVE badge), Optimize
+    (all groups, switches, lock banner, GO), Monitor (live bars), History
+    all render and respond. Harness deleted afterwards.
+  - **WinForms lesson recorded**: in this shell, early-added custom
+    owner-drawn controls in a shared strip never received WM_PAINT (zero
+    OnPaint calls logged, states all valid) while late-added siblings
+    painted — the header now uses plain Labels added LAST and a dedicated
+    always-topmost `_headerStrip` panel (ShowBusy no longer calls
+    BringToFront). Do not reintroduce GradientLabel/StatusChip into the
+    header without re-testing.
+  - Note: the elevated real exe cannot be driven by a non-elevated agent
+    (UIPI) — that is why the no-manifest harness exists. Owner should run
+    the manual checklist items 11-13 (v1.1.1) plus: Home cards switch,
+    Optimize switches toggle, tray "Go Eco", monitor overlay.
+
 ---
 
 ## §7 Build & verify (exact commands)

@@ -334,3 +334,89 @@ build 26200; the UIA fallback keeps its own read-back verification.
 
 (Items 1–10 above still apply; 2, 5, 6 and 7 are exactly the paths the
 v1.1.1 fixes unblock.)
+
+---
+
+# v1.2.0 verification (the single app + redesign — built 2026-09-07)
+
+Machine: dev PC, Windows build 26200 (an ASUS desktop board — ATKACPI
+opens but rejects the GPU device IDs, i.e. the probe-failure path, which
+is what the visual verification exercised).
+
+## Scope
+
+One commit series: `feat(unified)` (single app, D10) + `fix(gameprep)` +
+`docs(release)`. 7 files changed (Forms.cs rebuilt, Theme.cs Ui-kit,
+App.cs, build.cmd, Logger.cs, LogBrowser.cs, GamePrep.cs, TrayIcon.cs,
+AsusControl.cs, plus docs).
+
+## Integrated build (single target, zero diagnostics)
+
+`cmd /c "src\build.cmd"` — one csc invocation, no defines:
+
+| Artifact | size |
+|---|---|
+| `dist\GPU Mode Switch.exe` | **324,608 bytes** |
+
+Static checks: banned C# 6 syntax scan (`$"`, `?.`, `nameof(`, `=>`,
+`??=`, `using static`) — 0 hits; `#if MODE` — 0 left anywhere; UTF-16
+scan of the exe: "GPU MODE SWITCH", "1.2.0", "LOCKED - cleanup
+unavailable", "Go Eco (switch + restore)", "UNIFIED" all present.
+
+## Visual verification — out-of-tree no-manifest harness
+
+The real exe is `requireAdministrator`; a non-elevated agent cannot drive
+an elevated window (Windows UIPI blocks input/UIA). Harness: the SAME
+`src\*.cs` compiled to a temp exe WITHOUT the manifest (asInvoker) —
+identical UI, fully drivable. Driven through screenshots + the
+accessibility tree:
+
+- **Probe-failure path** (this machine's ATKACPI rejects the GPU IDs):
+  busy overlay → result overlay with detail text, tray rows correctly
+  disabled, all buttons reachable. Session log lands in
+  `logs\GpuModeSwitch\` with the "UNIFIED" header. ✓
+- **Home**: both mode cards render (emblems, taglines, action pills);
+  ECO card shows the ACTIVE badge with pulsing dot; header + status
+  labels visible. ✓
+- **Optimize**: profile bar, system/tray/performance/cleanup cards,
+  animated switches, amber LOCKED banner with the gate reasons, GO
+  button. ✓
+- **Monitor**: live sensor bars sampling (CPU/Disk/RAM; GPU N/A — no
+  queryable NVIDIA here), overlay button. ✓
+- **History**: all three action cards render. ✓
+- Harness + temp artifacts deleted afterwards.
+
+## Known-issue fixes verified from the owner's field logs
+
+- `GamePrep: HKLM write failed - The type of the value object did not
+  match...` — NetworkThrottlingIndex wrote a `uint` with
+  RegistryValueKind.Dword (needs `int`); now writes -1 (0xFFFFFFFF).
+- `Fax stop failed - Service Fax was not found` — now logged as
+  "not installed - skipped".
+- "Bottom buttons can't be toggled" — the D7 cleanup gates disabling
+  rows with only a small label; the deck now shows the amber LOCKED
+  banner + per-row lock glyphs with the reasons.
+
+## WinForms paint lesson (for future agents)
+
+In this borderless/DPI shell, custom owner-drawn controls added EARLY to
+a shared header strip never received WM_PAINT (verified by an OnPaint
+log probe: 0 invocations with valid Visible/handle/bounds), while
+late-added siblings painted fine. The header therefore uses plain
+Labels added LAST inside a dedicated, always-topmost `_headerStrip`,
+and `ShowBusy` no longer calls `BringToFront` (it used to cover the
+header). Do not reintroduce GradientLabel/StatusChip there without
+re-testing.
+
+## MANUAL CHECKLIST — v1.2.0 additions (owner, on the G513QR)
+
+14. [ ] Launch `GPU Mode Switch.exe`: Home shows the current mode; the
+       inactive card matches reality (dGPU on → GO TIME active).
+15. [ ] GO TIME card → Optimize deck: every switch toggles with the
+       animated slide; the cleanup card shows either live sizes or the
+       LOCKED banner with reasons (never silently grayed).
+16. [ ] GO: switch + selected features apply; result overlay; session
+       tray appears; tray "Go Eco (switch + restore)" flips to Eco fully.
+17. [ ] ECO MODE card from Home: one click, silent, result overlay.
+18. [ ] Monitor page shows live bars; "Show overlay over the game"
+       opens the draggable overlay.

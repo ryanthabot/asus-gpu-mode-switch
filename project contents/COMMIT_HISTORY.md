@@ -769,3 +769,38 @@ Date:   2026-09-07 19:26:57 -0400
  docs/HANDBOOK.md       |  44 ++++++++++++++++++-
  docs/HANDOFF_v1.1.1.md |  10 +++++
  5 files changed, 254 insertions(+), 1 deletion(-)
+
+------------------------------------------------------------------------
+
+# v1.2.0 commits (the single app + redesign, 2026-09-07)
+
+Generated from `git log 0ac721b..<v1.2.0 release commit>` on the ryanthabot mirror.
+
+commit bf75bcefb6c6beff4fe07c087e5ad928f1d4ba82
+Author: ryanthabot <258673122+ryanthabot@users.noreply.github.com>
+Date:   2026-09-07 19:35:03 -0400
+
+    docs(build-notes): v1.1.1 verification evidence + refresh the project-contents bundle to v1.1.1
+    
+    - BUILD_NOTES.md: v1.1.1 section - scope, integrated build (both targets
+      zero diagnostics, artifact sizes), banned-syntax scan, dangling-ref
+      check, UTF-16 string scan proving the fix is in both exes, the Energy
+      Saver GUID probe evidence (old GUID rc=2 / corrected GUID read+write+
+      verify rc=0 on build 26200, no-op), and manual checklist items 11-13
+      for the owner on the G513QR.
+    - project contents/: snapshots refreshed to v1.1.1 (README, HANDBOOK,
+      BUILD_NOTES, + new CHANGELOG.md, PORTABILITY.md, HANDOFF_v1.1.1.md),
+      COMMIT_HISTORY.md appended with the six v1.1.0->v1.1.1 commits,
+      CONTENTS.md rewritten for the v1.1.1 publish state and open v1.2.0
+      item.
+
+ BUILD_NOTES.md                     |  77 +++++++
+ project contents/BUILD_NOTES.md    |  77 +++++++
+ project contents/CHANGELOG.md      | 117 ++++++++++
+ project contents/COMMIT_HISTORY.md | 163 ++++++++++++++
+ project contents/CONTENTS.md       |  53 +++--
+ project contents/HANDBOOK.md       |  99 +++++++++
+ project contents/HANDOFF_v1.1.1.md | 442 +++++++++++++++++++++++++++++++++++++
+ project contents/PORTABILITY.md    |  68 ++++++
+ project contents/README.md         |  16 ++
+ 9 files changed, 1091 insertions(+), 21 deletions(-)

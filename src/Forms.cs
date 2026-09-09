@@ -1005,6 +1005,8 @@ namespace GpuModeSwitch
         private readonly MonitorPanel _monitorPanel = new MonitorPanel();
         private readonly Button _overlayBtn = new Button();
         private readonly Label _monHint = new Label();
+        private readonly Label _refreshLabel = new Label();          // v1.2.2 refresh-rate picker
+        private readonly ComboBox _refreshBox = new ComboBox();
 
         // ---- history section -------------------------------------------------
         private readonly Panel _histSection = new Panel();
@@ -1071,7 +1073,15 @@ namespace GpuModeSwitch
 
             _content.Controls.AddRange(new Control[] { _homeSection, _optSection, _monSection, _histSection, _busy });
             _busy.BringToFront();                    // above the sections, below the header strip
-            _content.Controls.Add(_headerStrip);     // added last = topmost, permanently - ShowBusy's BringToFront can never cover it
+            _content.Controls.Add(_headerStrip);
+            // (v1.2.2) WinForms z-order gotcha: Controls.Add appends to the
+            // END of the collection and index 0 is TOPMOST - so "added last"
+            // is actually the BOTTOM, and the full-size home section covered
+            // the whole header strip (title/chips/X painted nowhere, though
+            // UIA still saw them). BringToFront puts the strip at index 0 =
+            // genuinely topmost, permanently - ShowBusy's BringToFront can
+            // never cover it.
+            _headerStrip.BringToFront();
             Controls.Add(_content);
             Controls.Add(_side);
 
@@ -1212,8 +1222,11 @@ namespace GpuModeSwitch
             // first v1.2.0 build only the last-added children of the strip
             // ever received paint, so the marquee controls are added last.
             _headerStrip.BackColor = Ui.Bg;
-            _headerStrip.Controls.Add(_x);
-            _headerStrip.Controls.Add(_min);
+            // Add order (v1.2.2): the strip's children are laid out without
+            // overlaps (title/subtitle left, chips right, bar/status bottom),
+            // so sibling z-order does not matter - except the chrome buttons,
+            // which are explicitly brought to front (index 0 = topmost in
+            // WinForms) so nothing can ever cover them.
             _headerStrip.Controls.Add(_bar);
             _headerStrip.Controls.Add(_status);
             _headerStrip.Controls.Add(_chipBus);
@@ -1221,6 +1234,10 @@ namespace GpuModeSwitch
             _headerStrip.Controls.Add(_chipEs);
             _headerStrip.Controls.Add(_subtitle);
             _headerStrip.Controls.Add(_title);
+            _headerStrip.Controls.Add(_min);
+            _headerStrip.Controls.Add(_x);
+            _min.BringToFront();
+            _x.BringToFront();
             MakeDraggable(_headerStrip);
             _content.BackColor = Ui.Bg;
         }
@@ -1455,7 +1472,41 @@ namespace GpuModeSwitch
             _monHint.BackColor = Color.Transparent;
             _monHint.AutoSize = true;
 
+            // Refresh-rate picker (v1.2.2): the dropdown drives the sampling
+            // interval live (MonitorEngine.Start re-targets a running timer)
+            // and persists the choice for the next session.
+            _refreshLabel.Text = "Refresh rate";
+            _refreshLabel.ForeColor = Ui.TextDim;
+            _refreshLabel.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            _refreshLabel.BackColor = Color.Transparent;
+            _refreshLabel.AutoSize = true;
+
+            _refreshBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            _refreshBox.Font = new Font("Segoe UI", 9.5f);
+            _refreshBox.Width = 90;
+            _refreshBox.FlatStyle = FlatStyle.Flat;
+            _refreshBox.BackColor = Color.FromArgb(42, 42, 49);
+            _refreshBox.ForeColor = Color.FromArgb(220, 220, 226);
+            int savedMs = MonitorEngine.SavedIntervalMs;
+            foreach (int ms in MonitorEngine.IntervalChoicesMs)
+            {
+                _refreshBox.Items.Add(ms >= 1000 ? (ms / 1000) + " s" : ms + " ms");
+                if (ms == savedMs) _refreshBox.SelectedIndex = _refreshBox.Items.Count - 1;
+            }
+            if (_refreshBox.SelectedIndex < 0) _refreshBox.SelectedIndex = 1;   // 2 s default
+            _refreshBox.SelectedIndexChanged += delegate
+            {
+                int idx = _refreshBox.SelectedIndex;
+                if (idx < 0 || idx >= MonitorEngine.IntervalChoicesMs.Length) return;
+                int ms = MonitorEngine.IntervalChoicesMs[idx];
+                MonitorEngine.SavedIntervalMs = ms;
+                MonitorEngine.Start(ms);          // live re-target when sampling
+                Log.Chan("MONITOR", "refresh rate set to " + ms + " ms (saved)");
+            };
+
             _monSection.Controls.Add(_monitorPanel);
+            _monSection.Controls.Add(_refreshLabel);
+            _monSection.Controls.Add(_refreshBox);
             _monSection.Controls.Add(_overlayBtn);
             _monSection.Controls.Add(_monHint);
         }
@@ -1730,7 +1781,9 @@ namespace GpuModeSwitch
             int W = _monSection.Width;
             int mw = Math.Min(W - 48, 720);
             _monitorPanel.SetBounds((W - mw) / 2, 120, mw, 240);
-            _overlayBtn.Location = new Point((W - _overlayBtn.Width) / 2, 380);
+            _refreshLabel.Location = new Point((W - 260) / 2, 372);
+            _refreshBox.Location = new Point((W - 260) / 2 + 170, 368);
+            _overlayBtn.Location = new Point((W - _overlayBtn.Width) / 2, 412);
             _monHint.Location = new Point((W - 420) / 2, _overlayBtn.Bottom + 12);
         }
 
@@ -1863,7 +1916,22 @@ namespace GpuModeSwitch
                     UpdateStateUi();
                     SetNavEnabled(true);
 
-                    if (_autoMode || _startGo)
+                    // (v1.2.2) --eco wins over --auto: "GPU Mode Switch.exe
+                    // --eco --auto" used to fall into the go branch (the
+                    // _autoMode check came first) and applied STANDARD while
+                    // the caller asked for eco. Mode flags are checked before
+                    // the auto/confirm flow now.
+                    if (_startEco)
+                    {
+                        if (_autoMode)
+                        {
+                            Log.Info("UI: --eco --auto given, applying right away");
+                            BeginEcoApply();
+                        }
+                        else if (_confirmMode) EnterEcoConfirm();
+                        else BeginEcoApply();
+                    }
+                    else if (_autoMode || _startGo)
                     {
                         EnterOptimize();
                         if (_autoMode)
@@ -1873,11 +1941,6 @@ namespace GpuModeSwitch
                             Log.Info("UI: --auto given, applying right away");
                             BeginGoApply();
                         }
-                    }
-                    else if (_startEco)
-                    {
-                        if (_confirmMode) EnterEcoConfirm();
-                        else BeginEcoApply();
                     }
                     else
                     {
@@ -2633,7 +2696,7 @@ namespace GpuModeSwitch
 
         private void EnsureMonitorEngine()
         {
-            if (!MonitorEngine.Running) MonitorEngine.Start(2000);
+            if (!MonitorEngine.Running) MonitorEngine.Start(MonitorEngine.SavedIntervalMs);
         }
 
         private void BeginExitApp()

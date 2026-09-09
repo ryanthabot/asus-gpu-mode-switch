@@ -7,6 +7,62 @@ renumbered or rewritten. Fuller prose for older versions lives in
 `README.md`; the authoritative code history is git; GitHub Releases carry
 the built executables.
 
+## v1.2.2 — 2026-09-08
+
+**Field fixes from the v1.2.1 black-ice logs plus one startup hang found
+during verification** (five repairs, one feature):
+
+1. **Energy Saver: the Settings window must be RESTORED, not minimized.**
+   The v1.2.1 flow opened `ms-settings:powersleep` minimized and
+   re-minimized it the moment it appeared — but a minimized WinUI window
+   virtualizes its content out of the UIA tree, so the Energy saver card
+   was never found and the automation aborted every run. The window is
+   now opened normal + `SW_RESTORE` + foregrounded before the search.
+   Field-verified both directions on black-ice build 26200:
+   `toggle now On (verified)` / `toggle now Off (verified)`.
+2. **Energy Saver: scroll into view + fresh-rect expand click.** On some
+   runs the page opened scrolled (Settings remembers scroll position):
+   the toggle sat below the fold where WinUI virtualizes it out of the
+   tree, and the expand click used rects snapshotted BEFORE the scroll,
+   so it could miss — or worse, land on the off-screen toggle and flip
+   it blindly. The card is now scrolled into view (`ScrollItemPattern`)
+   first, the element snapshot is re-taken after the scroll, a
+   real-click fallback (`SetCursorPos` + `mouse_event`) presses "Show
+   more settings" when it exposes no Invoke pattern (observed on 26200),
+   and if the toggle is already visible after scrolling no expander
+   click is made at all (clicking would collapse an expanded card). The
+   toggle flip itself has the same real-click fallback for the rare
+   pattern-vanishes case.
+3. **Startup hang: counter priming left the UI thread.** Every launch
+   froze ~12 s while `MonitorEngine.Start` created and primed its
+   performance counters synchronously on the UI thread — and on a
+   machine with a degraded WMI/PDH stack that same call blocked for
+   minutes, leaving a blank window that ignored all clicks (exactly what
+   the v1.2.2 visual test caught on black-ice). Counter priming now runs
+   once on a pool thread, every sample runs on a pool thread (the
+   Forms.Timer tick only schedules it), and `DisposeCounters` uses
+   `Monitor.TryEnter` so a stop can never block on an in-flight prime.
+   The `SampleReady` event was already documented as any-thread (both
+   subscribers marshal via `BeginInvoke`).
+4. **The header strip paints.** The `—`/`✕` buttons (and title/chips
+   alongside them) were invisible because of a WinForms z-order gotcha:
+   `Controls.Add` appends to the END of the collection where index 0 is
+   TOPMOST, so the full-size home section sat ABOVE the strip that was
+   "added last". `_headerStrip.BringToFront()` (plus the buttons' own)
+   puts the chrome permanently on top. Visually verified via remote
+   screenshots on black-ice.
+5. **`--eco --auto` applies eco.** The mode flags were checked after the
+   `--auto` branch, so `--eco --auto` ran a STANDARD apply first;
+   `_startEco` now wins and logs `UI: --eco --auto given, applying right
+   away`.
+
+**New:** the Monitor section has a **refresh-rate dropdown** (1 s / 2 s /
+5 s / 10 s / 15 s, default 2 s). The choice re-targets the sampling timer
+live and persists in `%LOCALAPPDATA%\GpuModeSwitch\monitor_interval.txt`
+across sessions. Field-verified: dropdown opens and selects, persistence
+(`10000` on disk after the test), and the `monitor: started (2000 ms)` →
+`refresh rate set to N ms (saved)` log trail.
+
 ## v1.2.1 — 2026-09-07
 
 **Field fixes from the v1.2.0 black-ice logs** (three repairs, no behavior

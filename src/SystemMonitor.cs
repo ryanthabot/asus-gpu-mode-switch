@@ -6,13 +6,13 @@
 //  it never runs as a hidden background service and only samples while the
 //  host wants it (Start/Stop lifecycle is the host's job - A18).
 //
-//  MonitorEngine: a System.Windows.Forms.Timer drives the sampling so every
-//  MonitorSample arrives on the UI thread - both MonitorPanel and the Wave 5
-//  overlay can consume SampleReady without any marshaling of their own (the
-//  panel still guards with InvokeRequired so a manual RunOnce from a worker
-//  thread cannot cross threads). Marshaling decision documented here instead
-//  of a System.Threading.Timer: no InvokeRequired dance for consumers, and a
-//  2 s cadence never blocks the UI for the microseconds the sampling takes.
+//  MonitorEngine: a System.Windows.Forms.Timer schedules the sampling, but
+//  (v1.2.2) the tick itself only queues the real work onto the thread pool -
+//  counter priming, WMI queries and nvidia-smi can all block for a long time
+//  on a degraded WMI/PDH stack (observed 12 s healthy, minutes on a sick
+//  one), and any of that on the UI thread froze the whole window at startup.
+//  SampleReady may therefore fire on any thread; both MonitorPanel and the
+//  overlay already marshal via InvokeRequired/BeginInvoke.
 //
 //  Per tick (each metric individually try/caught; a failure keeps the last
 //  known value or reports N/A - never aborts the tick):
@@ -99,6 +99,54 @@ namespace GpuModeSwitch
         private const int MinIntervalMs = 250;        // sane floor: % counters need breathing room
         private const int SmiTimeoutMs = 2500;        // short timeout for one nvidia-smi run
 
+        // Refresh-rate choices offered by the Monitor page dropdown (v1.2.2).
+        public static readonly int[] IntervalChoicesMs = { 1000, 2000, 5000, 10000, 15000 };
+        private static readonly string IntervalFile = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "GpuModeSwitch", "monitor_interval.txt");
+
+        // Saved interval (clamped to the choice set; default 2000). Read at
+        // startup so the dropdown and engine agree across sessions.
+        public static int SavedIntervalMs
+        {
+            get
+            {
+                try
+                {
+                    if (System.IO.File.Exists(IntervalFile))
+                    {
+                        int v;
+                        if (int.TryParse(System.IO.File.ReadAllText(IntervalFile).Trim(), out v))
+                        {
+                            foreach (int c in IntervalChoicesMs) if (c == v) return v;
+                        }
+                    }
+                }
+                catch { }
+                return DefaultIntervalMs;
+            }
+            set
+            {
+                try
+                {
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(IntervalFile));
+                    System.IO.File.WriteAllText(IntervalFile, value.ToString(CultureInfo.InvariantCulture));
+                }
+                catch { }   // persistence is best-effort; the live interval still applies
+            }
+        }
+
+        // (v1.2.2) Counter creation and every sample can block for a long
+        // time on a degraded WMI/PDH stack (observed: ~12 s just to prime on
+        // a healthy machine, minutes-to-forever on one with a sick WMI repo,
+        // which froze the whole UI at startup). Neither ever runs on the UI
+        // thread anymore: priming happens once on a pool thread and the
+        // Forms.Timer tick only schedules the sample onto the pool. The
+        // SampleReady event was already documented as any-thread (both
+        // subscribers marshal via BeginInvoke).
+        private static volatile bool _priming;
+        private static volatile bool _sampling;
+
         private static readonly object _gate = new object();
 
         private static Timer _timer;                  // created once on the host UI thread, kept for restarts
@@ -129,9 +177,10 @@ namespace GpuModeSwitch
 
         private static MonitorSample _lastSample;
 
-        // Fired every tick with a fresh sample (UI thread when the engine
-        // runs on its Forms.Timer; also fired by RunOnce from the caller's
-        // thread). Subscribers must tolerate any thread or marshal themselves.
+        // Fired every tick with a fresh sample. Since v1.2.2 samples run on
+        // pool threads (the UI-thread tick only schedules them), so this can
+        // fire on any thread. Subscribers must tolerate any thread or
+        // marshal themselves.
         public static event Action<MonitorSample> SampleReady;
 
         // True while the engine is sampling.
@@ -147,16 +196,14 @@ namespace GpuModeSwitch
         }
 
         // Starts sampling every intervalMs (clamped to >= 250). If already
-        // running, just updates the interval. Recreates and re-primes the
-        // performance counters after a previous Stop.
+        // running, just updates the interval. Counter priming is queued to a
+        // pool thread (see _priming) - Start itself never blocks.
         public static void Start(int intervalMs)
         {
             if (intervalMs < MinIntervalMs)
             {
                 intervalMs = MinIntervalMs;
             }
-
-            EnsureCounters();
 
             if (_timer == null)
             {
@@ -170,6 +217,7 @@ namespace GpuModeSwitch
                 _timer.Start();
                 Log.Chan("MONITOR", "monitor: started (" + intervalMs.ToString(CultureInfo.InvariantCulture) + " ms)");
             }
+            PrimeCountersAsync();
         }
 
         // Starts with the default interval (2000 ms).
@@ -192,9 +240,10 @@ namespace GpuModeSwitch
         }
 
         // One manual sample, for tests: creates + primes the counters if
-        // needed, samples once and fires SampleReady on the caller's thread.
-        // Note: a cold call (no prior Start) reads the % counters right after
-        // priming, so CPU/disk report ~0 - run Start() for real numbers.
+        // needed (BLOCKING - unlike Start), samples once and fires
+        // SampleReady on the caller's thread. Note: a cold call (no prior
+        // Start) reads the % counters right after priming, so CPU/disk
+        // report ~0 - run Start() for real numbers.
         public static void RunOnce()
         {
             EnsureCounters();
@@ -205,7 +254,31 @@ namespace GpuModeSwitch
 
         private static void OnTick(object sender, EventArgs e)
         {
-            SampleNow();
+            // Ticks fire on the UI thread: never sample there (a sick WMI
+            // stack would freeze the whole window). Skip while priming or
+            // while a previous sample is still running - the next tick
+            // catches up.
+            if (_priming || _sampling) return;
+            _sampling = true;
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate(object state)
+            {
+                try { SampleNow(); }
+                finally { _sampling = false; }
+            });
+        }
+
+        // Queues counter creation to the pool once per need. Harmless if the
+        // counters already exist or a priming run is in flight.
+        private static void PrimeCountersAsync()
+        {
+            if (_cpuCounter != null && _diskCounter != null) return;
+            if (_priming) return;
+            _priming = true;
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate(object state)
+            {
+                try { EnsureCounters(); }
+                finally { _priming = false; }
+            });
         }
 
         // Builds one sample under the lock, then fires the event outside it.
@@ -284,7 +357,11 @@ namespace GpuModeSwitch
 
         private static void DisposeCounters()
         {
-            lock (_gate)
+            // Never wait: if a pool thread is priming/sampling under the
+            // gate, skip disposal (a couple of leaked PDH handles until
+            // process exit beat a frozen UI). The next Start re-primes.
+            if (!System.Threading.Monitor.TryEnter(_gate)) return;
+            try
             {
                 if (_cpuCounter != null)
                 {
@@ -301,6 +378,10 @@ namespace GpuModeSwitch
                     try { _cpuTempSearcher.Dispose(); } catch { }
                     _cpuTempSearcher = null;
                 }
+            }
+            finally
+            {
+                System.Threading.Monitor.Exit(_gate);
             }
         }
 

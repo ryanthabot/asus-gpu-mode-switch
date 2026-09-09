@@ -68,6 +68,19 @@ namespace GpuModeSwitch
         [DllImport("powrprof.dll")]
         private static extern uint PowerSetActiveScheme(IntPtr UserRootPowerKey, ref Guid SchemeGuid);
 
+        // (v1.2.2) Real-click fallback for Settings controls that expose no
+        // Invoke/Toggle pattern (the "Show more settings" expander on some
+        // builds). The synthetic click needs the target visible, so the
+        // Settings window is restored + foregrounded first (RestoreWindow).
+        [DllImport("user32.dll")]
+        private static extern bool SetCursorPos(int x, int y);
+
+        [DllImport("user32.dll")]
+        private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
         // true = on, false = off, null = unknown / not present (persisted value)
         public static bool? GetSavedState()
         {
@@ -224,6 +237,22 @@ namespace GpuModeSwitch
             catch { }
         }
 
+        // SW_RESTORE: a minimized WinUI window virtualizes its content away
+        // from the UIA tree, so the window is restored before any search.
+        // Also foregrounded: the real-click fallback (ClickPoint) needs the
+        // window unobscured at its UIA-reported screen position.
+        private static void RestoreWindow(AutomationElement el)
+        {
+            try
+            {
+                IntPtr hwnd = (IntPtr)el.Current.NativeWindowHandle;
+                ShowWindow(hwnd, 9);   // SW_RESTORE
+                SetForegroundWindow(hwnd);
+                Log.Chan("POWER", "EnergySaver: our Settings window restored for automation");
+            }
+            catch { }
+        }
+
         // Presses the Energy saver card's own "Show more settings" button
         // (matched by position within the card). Returns false when the card
         // is already expanded and exposes no such button.
@@ -256,7 +285,38 @@ namespace GpuModeSwitch
             }
             Log.Chan("POWER", "EnergySaver: card found at " + gRect.X + "," + gRect.Y);
 
-            foreach (AutomationElement e in all)
+            // (v1.2.2) The page may open scrolled (Settings remembers it), and
+            // an off-screen toggle is virtualized out of the UIA tree while a
+            // stale rect makes the click land on nothing. Scroll the card to
+            // the top of the viewport, then re-snapshot so every rect below
+            // is fresh.
+            ScrollIntoView(esGroup);
+            try { gRect = esGroup.Current.BoundingRectangle; } catch {}
+
+            AutomationElementCollection fresh = settings.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+
+            // After scrolling, an already-expanded card may expose the toggle
+            // without any click - pressing "Show more settings" now would
+            // COLLAPSE it. Check first.
+            foreach (AutomationElement e in fresh)
+            {
+                string tn = "";
+                try { tn = e.Current.Name; } catch {}
+                if (tn != "Always use energy saver") continue;
+                object tp;
+                if (!e.TryGetCurrentPattern(TogglePattern.Pattern, out tp)) continue;
+                System.Windows.Rect tr = System.Windows.Rect.Empty;
+                try { tr = e.Current.BoundingRectangle; } catch {}
+                if (tr.IsEmpty) continue;
+                float tcy = (float)(tr.Y + tr.Height / 2);
+                if (tcy >= gRect.Y - 5 && tcy <= gRect.Y + gRect.Height + 5)
+                {
+                    Log.Chan("POWER", "EnergySaver: card already expanded (toggle visible after scroll) - no click made");
+                    return true;
+                }
+            }
+
+            foreach (AutomationElement e in fresh)
             {
                 string n = "";
                 try { n = e.Current.Name; } catch {}
@@ -268,17 +328,53 @@ namespace GpuModeSwitch
                 if (cy >= gRect.Y - 5 && cy <= gRect.Y + gRect.Height + 5)
                 {
                     object pat;
-                    if (!e.TryGetCurrentPattern(InvokePattern.Pattern, out pat))
+                    if (e.TryGetCurrentPattern(InvokePattern.Pattern, out pat))
                     {
-                        Log.Chan("POWER", "EnergySaver: expand button has no Invoke pattern");
-                        return false;
+                        ((InvokePattern)pat).Invoke();
+                        return true;
                     }
-                    ((InvokePattern)pat).Invoke();
+                    // (v1.2.2) No Invoke pattern on this build - click the
+                    // button's center for real instead of giving up. Safe
+                    // here: the Settings window is our own, restored and
+                    // foregrounded, and the rect is in screen coordinates.
+                    Log.Chan("POWER", "EnergySaver: expand button has no Invoke pattern - clicking its center instead");
+                    ClickPoint((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2));
                     return true;
                 }
             }
             Log.Chan("POWER", "EnergySaver: no show-more button inside the card - it appears already expanded");
             return false;
+        }
+
+        // One left click at a screen point (SetCursorPos + mouse_event).
+        private static void ClickPoint(int x, int y)
+        {
+            try
+            {
+                SetCursorPos(x, y);
+                Thread.Sleep(150);                      // let hover/animation settle
+                mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);   // LEFTDOWN
+                Thread.Sleep(40);
+                mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);   // LEFTUP
+            }
+            catch { }
+        }
+
+        // Scrolls an element to the top of the Settings page viewport so the
+        // elements under it (the expander's hidden rows) enter the UIA tree
+        // and report real screen rects. No-op when unsupported.
+        private static void ScrollIntoView(AutomationElement el)
+        {
+            try
+            {
+                object p;
+                if (el.TryGetCurrentPattern(ScrollItemPattern.Pattern, out p))
+                {
+                    ((ScrollItemPattern)p).ScrollIntoView();
+                    Thread.Sleep(400);              // let the scroll + revirtualization settle
+                }
+            }
+            catch { }
         }
 
         private static void CloseSettings(AutomationElement settings)
@@ -294,21 +390,24 @@ namespace GpuModeSwitch
 
         // Fallback only (v1.1.1): opens Settings > Power & battery, expands
         // the Energy saver card and toggles "Always use energy saver" via UI
-        // Automation. As invisible as the platform allows: our window is
-        // opened minimized and minimized again the moment it appears, no
-        // action ever moves the real mouse (Invoke/Toggle patterns only),
-        // and only a window this process launched is used - a pre-existing
-        // Settings window is never adopted or closed.
+        // Automation. v1.2.2: the window must be RESTORED, not minimized -
+        // a minimized WinUI window renders nothing, its content is
+        // virtualized out of the UIA tree and the Energy saver card is
+        // "not found on the page" (v1.1.1/v1.2.1 field regression; the
+        // verified-working v1.0.15-1.0.20 flow showed the window briefly).
+        // Still mouse-free (Invoke/Toggle patterns only) and only a window
+        // this process launched is used - a pre-existing Settings window is
+        // never adopted or closed.
         public static bool ToggleAlwaysUseEnergySaver(bool on)
         {
             List<IntPtr> preExisting = SnapshotSettingsWindows();
-            Log.Chan("POWER", "EnergySaver: opening Settings > Power & battery > Energy saver (minimized)");
+            Log.Chan("POWER", "EnergySaver: opening Settings > Power & battery > Energy saver");
             try
             {
                 Process.Start(new ProcessStartInfo("ms-settings:powersleep")
                 {
                     UseShellExecute = true,
-                    WindowStyle = ProcessWindowStyle.Minimized   // honored or not; minimized again below
+                    WindowStyle = ProcessWindowStyle.Normal
                 });
             }
             catch (Exception ex)
@@ -322,7 +421,7 @@ namespace GpuModeSwitch
             {
                 Thread.Sleep(400);
                 settings = FindNewSettingsWindow(preExisting);
-                if (settings != null) MinimizeWindow(settings);
+                if (settings != null) RestoreWindow(settings);   // content must render for UIA
             }
             if (settings == null)
             {
@@ -380,9 +479,18 @@ namespace GpuModeSwitch
                 }
                 else
                 {
-                    Log.Chan("POWER", "EnergySaver: toggle pattern unavailable");
-                    CloseSettings(settings);
-                    return false;
+                    // (v1.2.2) Pattern vanished between find and flip (rare,
+                    // but seen on WinUI virtualization) - click the switch
+                    // for real instead of failing the whole apply.
+                    System.Windows.Rect tr = toggle.Current.BoundingRectangle;
+                    if (tr.IsEmpty)
+                    {
+                        Log.Chan("POWER", "EnergySaver: toggle pattern unavailable and rect empty");
+                        CloseSettings(settings);
+                        return false;
+                    }
+                    Log.Chan("POWER", "EnergySaver: toggle pattern unavailable - clicking its center instead");
+                    ClickPoint((int)(tr.X + tr.Width / 2), (int)(tr.Y + tr.Height / 2));
                 }
             }
             catch (Exception ex)

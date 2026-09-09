@@ -11,6 +11,28 @@ two-executable pair (Go Time.exe / Eco Mode.exe) is retired.
 | **GO TIME** | Standard GPU mode: dGPU enabled, hybrid (MSHybrid) display path — configure the session on the Optimize page, then press GO |
 | **ECO MODE** | Eco GPU mode: the dGPU is completely powered off (battery / silence) — one click from Home |
 
+> **v1.2.2** — **Energy Saver verified both directions + visible window
+> controls + a Monitor refresh-rate picker** (includes everything from
+> v1.2.1): the Settings automation now RESTORES (never minimizes) its own
+> window — a minimized WinUI window virtualizes its content out of the UIA
+> tree, which is why every v1.2.x Energy Saver run died at "card not
+> found" — scrolls the Energy saver card into view, re-snapshots element
+> rects after the scroll (stale rects could click the wrong thing), and
+> falls back to a real click when the "Show more settings" expander
+> exposes no Invoke pattern (build 26200). Field-verified on the target
+> G513QR: `toggle now On (verified)` on eco, `toggle now Off (verified)`
+> on go. The window's **`—` and `✕` buttons now actually paint** (a
+> WinForms z-order gotcha had the home section covering the whole header
+> strip). The **Monitor page gained a refresh-rate dropdown** (1 s / 2 s /
+> 5 s / 10 s / 15 s, default 2 s) that re-targets sampling live and
+> persists across sessions. Also fixed: a **startup hang** —
+> performance-counter priming ran on the UI thread (12 s frozen on a
+> healthy machine, minutes-to-forever on a degraded WMI stack; all
+> counter/sampling work moved to pool threads), and **`--eco --auto`
+> applied Standard first** (the mode flag now wins). v1.2.1 (same release
+> train): scoped storage-cleanup gates so a pending reboot locks only the
+> WU/component-store rows instead of everything.
+>
 > **v1.2.0** — **the single app + full redesign**: ONE executable
 > (`GPU Mode Switch.exe`) with both modes inside — Home shows the current
 > mode and two glowing mode cards (GO TIME / ECO MODE, the active one
@@ -232,8 +254,8 @@ two-executable pair (Go Time.exe / Eco Mode.exe) is retired.
 
 ## Download
 
-Grab both executables from the
-[**Releases**](../../releases/latest) page — individually or as a single zip.
+Grab **`GPU Mode Switch.exe`** (the single unified app) from the
+[**Releases**](../../releases/latest) page.
 
 ## Requirements
 
@@ -247,13 +269,18 @@ Grab both executables from the
 ## How to use
 
 1. Close games and other apps that are using the dGPU.
-2. Double-click **Go Time.exe** or **Eco Mode.exe**, confirm the UAC prompt.
-3. Done — the app probes, applies the switch live (no restart) and shows the
-   result, all in one click. The shimmer bar tracks the whole cycle.
-4. Run the other app whenever you want to switch back.
+2. Double-click **GPU Mode Switch.exe**, confirm the UAC prompt.
+3. Home shows the current mode — click **ECO MODE** to power the dGPU off,
+   or **GO TIME** to configure the session on the Optimize page and press
+   GO. The switch applies live (no restart) and the shimmer bar tracks the
+   whole cycle.
+4. Click the other card whenever you want to switch back.
 
-Optional: run with `--confirm` to review the detected state and press
-**Apply** before anything is switched.
+Optional: run with `--eco` / `--gotime` to preselect a mode, `--auto` to
+apply immediately without the selection stage, or `--confirm` to review
+the detected state and press **Apply** before anything is switched
+(`--eco --auto` = one-shot eco switch, e.g. from a script or scheduled
+task).
 
 A restart is only ever needed in one situation: if the firmware refuses the
 switch because the display path is physically running through the dGPU

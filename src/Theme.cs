@@ -1,4 +1,4 @@
-//  Theme.cs  (v1.2.0 / v1.3.0)
+//  Theme.cs  (v1.2.0 / v1.2.3)
 //  -------------------
 //  The visual system of the unified app. Kept from v1.0.x-1.1: WindowIcons,
 //  UiShapes, ShimmerBar. Added in v1.2.0 (the redesign): Ui (the shared
@@ -11,7 +11,7 @@
 //  double buffering; Segoe Fluent Icons / MDL2 glyphs are used when the
 //  font family exists and degrade to plain text otherwise.
 //
-//  v1.3.0: the palette is runtime-mutable - every Ui color is a plain
+//  v1.2.3: the palette is runtime-mutable - every Ui color is a plain
 //  static field the Theme page rewrites (ThemeState.ApplyUi) before the
 //  next repaint. ThemeState (also here) holds the persisted theme
 //  (%LOCALAPPDATA%\GpuModeSwitch\theme.txt, the same plain-text style as
@@ -30,7 +30,7 @@ using System.Windows.Forms;
 namespace GpuModeSwitch
 {
     // The shared palette + small drawing helpers for the unified deck.
-    // v1.3.0: every entry is a mutable static field - ThemeState.ApplyUi
+    // v1.2.3: every entry is a mutable static field - ThemeState.ApplyUi
     // rewrites them and every owner-drawn control picks the new values up on
     // repaint. The defaults below ARE the shipped Midnight look, so an
     // unthemed run renders exactly like v1.2.
@@ -56,7 +56,7 @@ namespace GpuModeSwitch
         public static Color ProfileBarText = Color.FromArgb(210, 210, 216);
         public static Color ProfileBarDim = Color.FromArgb(140, 140, 148);
 
-        // Monitor deck surface (v1.3.0 sensor wave) - MonitorPanel reads
+        // Monitor deck surface (v1.2.3 sensor wave) - MonitorPanel reads
         // these; the defaults are the exact v1.2 hard-coded look.
         public static Color MonPanelBack = Color.FromArgb(24, 24, 28);
         public static Color MonBarTrack = Color.FromArgb(40, 40, 47);
@@ -77,7 +77,7 @@ namespace GpuModeSwitch
         public static Color CardGradB = Color.FromArgb(20, 24, 34);
         public static bool CardGradEnabled = false;
 
-        // Popup surfaces (v1.3.0 popup restyle): the Session History / Log
+        // Popup surfaces (v1.2.3 popup restyle): the Session History / Log
         // Browser windows, the profile bar and their lists. Defaults are the
         // exact v1.1-v1.2 inline values, so an unthemed run renders identical.
         public static Color PopupBack = Color.FromArgb(24, 24, 28);
@@ -232,7 +232,7 @@ namespace GpuModeSwitch
         }
     }
 
-    // Dark native chrome for the popup forms (v1.3.0 restyle): flips the
+    // Dark native chrome for the popup forms (v1.2.3 restyle): flips the
     // DWM immersive-dark-mode attribute so the native title bar matches the
     // dark body. Attribute 20 is the current number; Windows builds older
     // than ~2004 only accept 19, so that is the fallback. Dark scrollbars
@@ -976,7 +976,7 @@ namespace GpuModeSwitch
     }
 
     // ---------------------------------------------------------------------
-    // v1.3.0 theme system
+    // v1.2.3 theme system
     // ---------------------------------------------------------------------
 
     // Clickable swatch chip (Theme page): rounded preview of one color with
@@ -1049,7 +1049,7 @@ namespace GpuModeSwitch
         }
     }
 
-    // Header backdrop (v1.3.0): the strip behind the title/chips paints the
+    // Header backdrop (v1.2.3): the strip behind the title/chips paints the
     // user's two-color gradient when Ui.GradEnabled is on, else the solid
     // Ui.Bg. Fully UserPaint (like Card / NavButton) so BOTH the direct
     // paints and the transparent-label composites go through this code -
@@ -1101,7 +1101,7 @@ namespace GpuModeSwitch
         public Color Bg, BgSide, Card, CardBorder, TextHi, Text, TextDim, Go, Eco, Cyan, Amber, Red;
     }
 
-    // Persisted theme state (v1.3.0): the active palette (from a preset or
+    // Persisted theme state (v1.2.3): the active palette (from a preset or
     // custom), the accent, the header gradient settings and the nav rail
     // color. Saved as plain "key=value" lines in
     // %LOCALAPPDATA%\GpuModeSwitch\theme.txt (the same best-effort style as

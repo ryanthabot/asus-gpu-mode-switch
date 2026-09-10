@@ -2,7 +2,7 @@
 //  ---------------------------
 //  The windows of the unified GPU Mode Switch app. MainForm (v1.2.0
 //  redesign): ONE borderless window with a sidebar rail (Home / Optimize /
-//  Monitor / History / Theme - the v1.3.0 palette page), a gradient header
+//  Monitor / History / Theme - the v1.2.3 palette page), a gradient header
 //  with live status chips, big mode
 //  cards on Home (GO TIME / ECO MODE - the active mode glows), the Go Time
 //  selection deck with animated ToggleSwitches in rounded cards (gate-
@@ -596,7 +596,7 @@ namespace GpuModeSwitch
     // Known tray applications for the Go Time post-switch picker. Candidates
     // are matched case-insensitively against running process names: contains
     // for long names, exact for short ones (so "vgc" can't match randomly).
-    // v1.3.0: ten apps. Each row also carries a launch command (exe + args)
+    // v1.2.3: ten apps. Each row also carries a launch command (exe + args)
     // so TrayApps can restore what it closed when Eco Mode applies; the
     // default paths are field-verified and ResolveLaunch falls back to a
     // versioned subfolder, the uninstall registry and a running-process
@@ -898,7 +898,7 @@ namespace GpuModeSwitch
         // Full close: stop any watchdog service whose binary matches the app
         // (Parsec's pservice relaunches parsecd on kill), kill the processes,
         // and re-check up to 3 rounds - refreshing the running state each time.
-        // v1.3.0: explicit WatchdogServices merge with the registry scan, and
+        // v1.2.3: explicit WatchdogServices merge with the registry scan, and
         // a fully-closed app is remembered for the Eco restore.
         public static void Close(TrayAppInfo app)
         {
@@ -1160,7 +1160,7 @@ namespace GpuModeSwitch
         Result,     // done or failed (result overlay)
         Monitor,    // live system monitor page
         History,    // logs + session history page
-        Theme       // palette + header gradient page (v1.3.0)
+        Theme       // palette + header gradient page (v1.2.3)
     }
 
     // ---------------------------------------------------------------------
@@ -1200,7 +1200,7 @@ namespace GpuModeSwitch
         private readonly NavButton _navOpt = new NavButton("\uE945", "Optimize");
         private readonly NavButton _navMon = new NavButton("\uE9D9", "Monitor");
         private readonly NavButton _navHist = new NavButton("\uE823", "History");
-        private readonly NavButton _navTheme = new NavButton("\uE790", "Theme");   // v1.3.0 palette page
+        private readonly NavButton _navTheme = new NavButton("\uE790", "Theme");   // v1.2.3 palette page
         private readonly Label _verLbl = new Label();
         private readonly Label _title = new Label();   // plain Label: the GradientLabel never received WM_PAINT in the strip (see HANDBOOK v1.2.0 notes)
         private readonly Label _subtitle = new Label();
@@ -1255,7 +1255,7 @@ namespace GpuModeSwitch
         private readonly Label _monHint = new Label();
         private readonly Label _refreshLabel = new Label();          // v1.2.2 refresh-rate picker
         private readonly ComboBox _refreshBox = new ComboBox();
-        private readonly Label _diskLabel = new Label();             // v1.3.0 disk-view picker
+        private readonly Label _diskLabel = new Label();             // v1.2.3 disk-view picker
         private readonly ComboBox _diskViewBox = new ComboBox();
 
         // ---- history section -------------------------------------------------
@@ -1265,7 +1265,7 @@ namespace GpuModeSwitch
         private readonly Button _histSessions = new Button();
         private readonly Label _histPath = new Label();
 
-        // ---- theme section (v1.3.0) -------------------------------------------
+        // ---- theme section (v1.2.3) -------------------------------------------
         private readonly Panel _themeSection = new Panel();
         private readonly Card _presetCard = new Card();
         private readonly List<ThemeSwatch> _presetSwatches = new List<ThemeSwatch>();
@@ -1424,10 +1424,12 @@ namespace GpuModeSwitch
             _side.Controls.Add(_navTheme);
 
             _verLbl.Text = "v" + Program.Version;
-            _verLbl.ForeColor = Ui.TextDim;
+            // same scheme as the popup header bars / tool buttons: Semibold
+            // over the Profile-bar dim tone - discrete on the rail, still readable
+            _verLbl.ForeColor = Ui.ProfileBarDim;
             _verLbl.BackColor = Color.Transparent;
             _verLbl.AutoSize = true;
-            _verLbl.Font = new Font("Segoe UI", 8f);
+            _verLbl.Font = new Font("Segoe UI Semibold", 8.5f);
             _side.Controls.Add(_verLbl);
         }
 
@@ -1496,7 +1498,7 @@ namespace GpuModeSwitch
             // deliberately REVERSED (x/status/bar first, title last): in the
             // first v1.2.0 build only the last-added children of the strip
             // ever received paint, so the marquee controls are added last.
-            // The strip itself (v1.3.0 HeaderStripPanel) paints the solid
+            // The strip itself (v1.2.3 HeaderStripPanel) paints the solid
             // Ui.Bg or the user's gradient in OnPaintBackground.
             _headerStrip.BackColor = Ui.Bg;
             // Add order (v1.2.2): the strip's children are laid out without
@@ -1800,7 +1802,7 @@ namespace GpuModeSwitch
                 Log.Chan("MONITOR", "refresh rate set to " + ms + " ms (saved)");
             };
 
-            // Disk-view picker (v1.3.0): which disk rows the monitor panel
+            // Disk-view picker (v1.2.3): which disk rows the monitor panel
             // shows. Persisted beside the refresh interval (same style).
             _diskLabel.Text = "Disks";
             _diskLabel.ForeColor = Ui.TextDim;
@@ -1884,7 +1886,7 @@ namespace GpuModeSwitch
             b.Cursor = Cursors.Hand;
         }
 
-        // ---- construction: theme (v1.3.0) -------------------------------------
+        // ---- construction: theme (v1.2.3) -------------------------------------
 
         // The Theme page: preset swatches, an accent picker, the header
         // gradient group, the nav rail color and a reset - every change
@@ -2162,10 +2164,10 @@ namespace GpuModeSwitch
                 b.ForeColor = Ui.Text;
             }
 
-            // monitor deck (v1.3.0): its rows/bars re-read the Ui.Mon* palette
+            // monitor deck (v1.2.3): its rows/bars re-read the Ui.Mon* palette
             _monitorPanel.ApplyTheme();
 
-            // profile bar follows the popup/toolbar palette (v1.3.0)
+            // profile bar follows the popup/toolbar palette (v1.2.3)
             _profileBar.ApplyTheme();
 
             SyncThemeUi();
@@ -3119,7 +3121,7 @@ namespace GpuModeSwitch
                 // paused Windows Update behind.
                 SessionSafety.RestoreAll();
 
-                // v1.3.0: restart the tray apps this run closed (session-
+                // v1.2.3: restart the tray apps this run closed (session-
                 // scoped remember list) - best-effort, never fails the switch.
                 List<string> trayRestored = null;
                 if (r.Ok)

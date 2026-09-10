@@ -14,10 +14,11 @@ public class U32 {
 }
 "@
 
-$exe = 'D:\OneDrive\Desktop New\GPU Mode Switch.exe'
-$p = Get-Process | Where-Object { $_.Name -eq 'GPU Mode Switch' } | Select-Object -First 1
-if (-not $p) { Start-Process -FilePath $exe -WorkingDirectory 'D:\OneDrive\Desktop New' | Out-Null; Start-Sleep -Seconds 4 }
-$p = Get-Process | Where-Object { $_.Name -eq 'GPU Mode Switch' } | Select-Object -First 1
+$exe = "D:\OneDrive\Desktop New\Big's GPU Switch & Game Optimizer.exe"
+$appName = "Big's GPU Switch & Game Optimizer"
+$p = Get-Process | Where-Object { $_.Name -eq $appName } | Select-Object -First 1
+if (-not $p) { Start-Process -FilePath $exe -WorkingDirectory 'D:\OneDrive\Desktop New' | Out-Null; Start-Sleep -Seconds 5 }
+$p = Get-Process | Where-Object { $_.Name -eq $appName } | Select-Object -First 1
 if (-not $p) { throw 'app not running' }
 $deadline = (Get-Date).AddSeconds(20)
 while ($p.MainWindowHandle -eq 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500; $p.Refresh() }
@@ -55,13 +56,18 @@ function Shot([string]$name) {
   "captured $name"
 }
 
-# nav rail: buttons 86x58 in side panel at (6,6); Home y=76, Opt +58, Mon +116, Hist +174
+# nav rail: Home y=76, Opt 134, Mon 192, Hist 250, Theme 308 (in side panel at 6,6)
 Click 49 111; Start-Sleep -Milliseconds 700; Shot 'bgs_home.png'
 Click 49 169; Start-Sleep -Milliseconds 700; Shot 'bgs_optimize.png'
 Wheel 6; Start-Sleep -Milliseconds 400; Shot 'bgs_optimize2.png'
 Wheel -8; Start-Sleep -Milliseconds 300
-Click 49 227; Start-Sleep -Seconds 3; Shot 'bgs_monitor.png'
+Click 49 227; Start-Sleep -Seconds 4; Shot 'bgs_monitor.png'
 Click 49 285; Start-Sleep -Milliseconds 700; Shot 'bgs_history.png'
 # session history button: centered 420x64 at section y=282 -> client (533, 320)
 Click 533 320; Start-Sleep -Milliseconds 1500; Shot 'bgs_sessionhist.png'
+# close popup via Escape, then theme page
+[System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+Start-Sleep -Milliseconds 500
+Click 49 343; Start-Sleep -Milliseconds 700; Shot 'bgs_theme.png'
 "DONE ALL"
+Stop-Transcript | Out-Null

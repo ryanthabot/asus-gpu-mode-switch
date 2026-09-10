@@ -4,7 +4,7 @@
 //  always-on-top, semi-transparent window showing CPU / RAM / Disk / dGPU /
 //  dGPU temp readings from MonitorEngine (src\SystemMonitor.cs), plus an
 //  iGPU row that appears only once the engine proves the iGPU phys mapping
-//  (v1.3.0 - the old "GPU" rows are labeled "dGPU" now that the two
+//  (v1.2.3 - the old "GPU" rows are labeled "dGPU" now that the two
 //  adapters are separate metrics). Per D6 the monitor
 //  only samples while the host wants it - the overlay never starts or stops
 //  the engine itself; while the engine is off the overlay shows a "monitor

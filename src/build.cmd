@@ -4,7 +4,7 @@ rem Builds the unified executable using the C# compiler that ships with
 rem Windows. No Visual Studio, .NET SDK, or internet access required.
 rem
 rem   dist\Big's GPU Switch & Game Optimizer.exe  -> both modes in one app
-rem   (renamed from "GPU Mode Switch.exe" in v1.3.0)
+rem   (renamed from "GPU Mode Switch.exe" in v1.2.3)
 rem
 rem The retired v1.x pair (Go Time.exe / Eco Mode.exe, built with the
 rem MODE_STANDARD / MODE_ECO defines) is gone - the mode is chosen at

@@ -1,6 +1,6 @@
 # Big's GPU Switch & Game Optimizer — "Go Time" & "Eco Mode"
 
-**ONE app, both modes**: **`Big's GPU Switch & Game Optimizer.exe`** (v1.3.0;
+**ONE app, both modes**: **`Big's GPU Switch & Game Optimizer.exe`** (v1.2.3;
 formerly `GPU Mode Switch.exe`) switches the
 **GPU Mode** on ASUS laptops — the same Standard / Eco switch that lives in
 *Armoury Crate → Devices → System Settings → GPU Performance* — without
@@ -8,7 +8,7 @@ opening Armoury Crate at all, then optimizes the session, monitors the
 hardware and themes itself to taste. Launch it and Home offers both modes;
 the old two-executable pair (Go Time.exe / Eco Mode.exe) is retired.
 
-> **v1.3.0** — **the "Big" release**: renamed to **Big's GPU Switch &
+> **v1.2.3** — **the "Big" release**: renamed to **Big's GPU Switch &
 > Game Optimizer** (tagline: *dGPU Control & System Optimization*); a
 > **10-app tray suite** (adds Wise Care 365, Overwolf, OpenBet LocatorT,
 > NVIDIA Broadcast, Wallpaper Engine — close on GO TIME, auto-restore on

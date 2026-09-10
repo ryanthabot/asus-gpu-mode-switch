@@ -145,7 +145,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.3.0";
+        public const string Version = "1.2.3";
 
         [STAThread]
         private static void Main(string[] args)
@@ -198,7 +198,7 @@ namespace GpuModeSwitch
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            // v1.3.0: apply the saved palette BEFORE any UI is constructed so
+            // v1.2.3: apply the saved palette BEFORE any UI is constructed so
             // a themed run never flashes the default look first.
             ThemeState.Load();
             Application.Run(new MainForm(auto, confirm, startGo, startEco));

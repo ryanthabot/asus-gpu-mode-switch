@@ -344,7 +344,7 @@ namespace GpuModeSwitch
             WindowIcons.Apply(this);
             DarkChrome.Apply(this);     // native title bar follows the dark body
 
-            // v1.3.0: the form is constructed fresh on every open, so colors
+            // v1.2.3: the form is constructed fresh on every open, so colors
             // read here follow the live theme; the public ApplyTheme covers a
             // form kept open across a theme change.
             BuildToolbar();
@@ -494,7 +494,7 @@ namespace GpuModeSwitch
             Controls.Add(layout);
         }
 
-        // Re-derives every popup color from the live Ui palette (v1.3.0).
+        // Re-derives every popup color from the live Ui palette (v1.2.3).
         // The constructor already reads Ui at build time - this exists for a
         // form kept open while the theme changes (and for verification).
         public void ApplyTheme()

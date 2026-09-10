@@ -14,11 +14,11 @@
 //
 //  Fully decoupled from the UI: the host callbacks are injected through the
 //  constructor (openWindow, applyEco, toggleOverlay, statusText, exitApp,
-//  plus the v1.3.0 optional restoreTrayApps / canRestoreTrayApps pair). A
+//  plus the v1.2.3 optional restoreTrayApps / canRestoreTrayApps pair). A
 //  null callback only disables its menu item - nothing throws. This file
 //  references no Forms.cs types (only Log, UiShapes and the framework).
 //
-//  Menu: Open Go Time / - / Restore (Eco Mode) / Restore tray apps (v1.3.0,
+//  Menu: Open Go Time / - / Restore (Eco Mode) / Restore tray apps (v1.2.3,
 //  disabled while nothing to restore) / Toggle overlay / Status
 //  (balloon tip showing statusText()) / - / Exit. Double-click on the icon
 //  = openWindow. The ContextMenuStrip is dark-themed with the same inline
@@ -61,7 +61,7 @@ namespace GpuModeSwitch
         private readonly Action _toggleOverlay;
         private readonly Func<string> _statusText;
         private readonly Action _exitApp;
-        private readonly Action _restoreTrayApps;       // v1.3.0: restart the apps GO closed
+        private readonly Action _restoreTrayApps;       // v1.2.3: restart the apps GO closed
         private readonly Func<bool> _canRestoreTrayApps;
         private readonly NotifyIcon _notify = new NotifyIcon();
         private readonly ContextMenuStrip _menu = new ContextMenuStrip();

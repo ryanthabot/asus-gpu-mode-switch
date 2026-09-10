@@ -30,7 +30,7 @@
 //    CPU temp - WMI root\WMI MSAcpi_ThermalZoneTemperature (CurrentTemperature
 //           is tenths of Kelvin -> Celsius); only on machines exposing it.
 //
-//  v1.3.0 sensor expansion: the dGPU is its own metric (nvidia-smi line 0;
+//  v1.2.3 sensor expansion: the dGPU is its own metric (nvidia-smi line 0;
 //  the legacy GpuPercent/GpuTempC/HasGpu/HasGpuTemp stay as dGPU aliases so
 //  the overlay/session code is untouched), a best-effort iGPU utilization
 //  via the "GPU Engine" counter category (which phys id is the dGPU is
@@ -86,7 +86,7 @@ namespace GpuModeSwitch
         public bool HasCpuTemp;
         public DateTime Timestamp;
 
-        // v1.3.0 sensor expansion. The dGPU is the discrete NVIDIA adapter
+        // v1.2.3 sensor expansion. The dGPU is the discrete NVIDIA adapter
         // (nvidia-smi GPU 0 on this app's target machines); the iGPU is every
         // other "GPU Engine" phys once the phys mapping is proven.
         public float DgpuPercent;         // valid when HasDgpu
@@ -169,7 +169,7 @@ namespace GpuModeSwitch
             }
         }
 
-        // Disk-view choices for the Monitor page dropdown (v1.3.0): which
+        // Disk-view choices for the Monitor page dropdown (v1.2.3): which
         // per-disk rows MonitorPanel shows. "combined" = the single
         // "Disks (combined)" row; "both" = one row per fixed drive plus the
         // combined row. Persisted like the interval.
@@ -227,7 +227,7 @@ namespace GpuModeSwitch
         private static PerformanceCounter _diskCounter;
         private static ManagementObjectSearcher _cpuTempSearcher;
 
-        // (v1.3.0) per-fixed-drive counters: one ("LogicalDisk","% Disk
+        // (v1.2.3) per-fixed-drive counters: one ("LogicalDisk","% Disk
         // Time","C:") per DriveType=3 drive found, created once per Ensure
         // cycle on the pool thread. _diskNamesSnapshot lets UI threads read
         // the discovered letters without taking _gate (a sample can hold it
@@ -236,7 +236,7 @@ namespace GpuModeSwitch
         private static Dictionary<string, PerformanceCounter> _diskCounters;
         private static volatile string[] _diskNamesSnapshot = new string[0];
 
-        // (v1.3.0) "GPU Engine" utilization counters for the iGPU metric.
+        // (v1.2.3) "GPU Engine" utilization counters for the iGPU metric.
         // Instance names change as processes start and stop, so the list is
         // rebuilt every ~5 samples (category enumeration is expensive - never
         // per sample).
@@ -426,7 +426,7 @@ namespace GpuModeSwitch
                 s.CpuTempC = _lastCpuTemp;
                 s.HasCpuTemp = _hasCpuTemp;
 
-                // v1.3.0: the dGPU is its own metric; the legacy Gpu* fields
+                // v1.2.3: the dGPU is its own metric; the legacy Gpu* fields
                 // above stay as aliases (overlay / session code unchanged).
                 s.DgpuPercent = ClampPct(_lastGpu);
                 s.HasDgpu = _hasGpu;
@@ -942,7 +942,7 @@ namespace GpuModeSwitch
             return true;
         }
 
-        // ---- iGPU (best effort, v1.3.0) -------------------------------------
+        // ---- iGPU (best effort, v1.2.3) -------------------------------------
         //
         // Windows exposes per-engine utilization in the "GPU Engine"
         // performance category; instance names look like
@@ -1221,7 +1221,7 @@ namespace GpuModeSwitch
         }
 
         // CPU temperature via WMI root\WMI MSAcpi_ThermalZoneTemperature
-        // (CurrentTemperature is tenths of Kelvin). v1.3.0 reads every zone:
+        // (CurrentTemperature is tenths of Kelvin). v1.2.3 reads every zone:
         // the hottest feeds the legacy CpuTempC field and the mean of all
         // plausible zones feeds CpuTempAvgC (the panel shows the average -
         // one honest "CPU temp" concept per field). Only queried while the
@@ -1356,7 +1356,7 @@ namespace GpuModeSwitch
     }
 
     // ---------------------------------------------------------------------
-    // Embeddable monitor panel (v1.3.0 rework): a TableLayoutPanel grid of
+    // Embeddable monitor panel (v1.2.3 rework): a TableLayoutPanel grid of
     // labeled bars built dynamically from the engine's disk list and the
     // disk-view selector -
     //   CPU | CPU temp (avg) | CPU hotspot | RAM | Disk (C:) | Disk (D:) |

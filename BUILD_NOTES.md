@@ -420,3 +420,43 @@ re-testing.
 17. [ ] ECO MODE card from Home: one click, silent, result overlay.
 18. [ ] Monitor page shows live bars; "Show overlay over the game"
        opens the draggable overlay.
+
+## Round v1.2.3 — the "Big" release (2026-09-09/10)
+
+- **Branch:** `v1.3.0-big-optimizer` (kept; the release was renumbered to
+  **v1.2.3** per owner instruction to maintain version sequencing). Built,
+  verified and released from it; merged to `main`, tagged `v1.2.3`.
+- **Compiler/builder:** unchanged (`src\build.cmd`, csc "for C# 5").
+  Output renamed to `dist\Big's GPU Switch & Game Optimizer.exe`.
+- **Waves (3 sub-agent implementation waves + owner identity pass):**
+  1. Theme engine — runtime-mutable `Ui` palette, `ThemeState` persistence
+     (`theme.txt`), Theme nav page (presets Midnight/Carbon/Ocean/Ember/Frost,
+     accent picker, header gradient, nav-rail color, reset), live
+     `ApplyTheme()`. Harness: 25/25 persistence + pixel-verified gradient.
+  2. Monitor — dGPU rows (nvidia-smi multi-line), iGPU usage (GPU-engine
+     phys-id mapping correlated against nvidia-smi), CPU temp avg (ACPI zone
+     mean), honest dimmed "n/a" for CPU hotspot / iGPU temp (no driverless
+     API), per-logical-disk rows + Disk-view selector (monitor_diskview.txt).
+     Harness: 18/18 (parsers, fail-soft, UI smoke across disk views).
+  3. Tray suite + popup restyle — 10-app table (paths field-scanned on
+     black-ice; registry/process fallbacks), close-on-GO with watchdog
+     services, session-scoped remember/restore on Eco + manual restore
+     (Home button + session-tray menu); Session History / Log Browser dark
+     chrome (DWM attr 20→19), owner-drawn headers in Profile-bar palette,
+     shared `Ui.StyleToolButton` (Segoe UI Semibold) incl. Profile bar.
+     Harness: 57/57 (table, lifecycle via `TrayApps.LaunchProcess` seam,
+     popup construction + painters). En-route fix: LogBrowser ctor
+     SplitContainer min-size crash.
+  4. Owner pass — rename (exe/window/header), tagline, header chip
+     alignment fix (AutoEllipsis + "via ..." + chip row 170→140), version
+     bump, v1.2.3 renumber, version label restyle (Segoe UI Semibold 8.5f,
+     `Ui.ProfileBarDim`).
+- **Verification on black-ice (SSH/schtasks only — nothing ran on the
+  builder):** tray-app field scan (registry uninstall + services + Run keys
+  + startup folder); 7 remote screenshots (Home / Optimize ×2 / Monitor /
+  History / Session History popup / Theme) reviewed — rename renders on one
+  line, chips baseline-aligned, 11 monitor rows with dimmed n/a placeholders,
+  popup fully dark, Theme page intact.
+- **Published:** exe deployed to `D:\OneDrive\Desktop New\` on black-ice
+  (old `GPU Mode Switch.exe` removed); `main` + tag `v1.2.3` pushed to
+  `origin` (github.com/ryanthabot) with a GitHub Release carrying the exe.

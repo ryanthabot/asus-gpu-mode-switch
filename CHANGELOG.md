@@ -7,7 +7,7 @@ renumbered or rewritten. Fuller prose for older versions lives in
 `README.md`; the authoritative code history is git; GitHub Releases carry
 the built executables.
 
-## v1.3.0 — 2026-09-09
+## v1.2.3 — 2026-09-10
 
 **The "Big" release: new name, theme engine, tray-app suite, monitor
 expansion and popup restyle.** The app is renamed **Big's GPU Switch &
@@ -55,6 +55,10 @@ existing history is preserved.
    single-line (AutoEllipsis, shortened "via ..." text) and the chip row
    was slimmed to make room for the longer app title. Minimize/exit
    buttons untouched.
+6. **Version identifier restyled.** The nav-rail version label now uses
+   Segoe UI Semibold in the Profile-bar dim tone — the same font/color
+   scheme as the Session History column bar and the tool buttons:
+   discrete on the dark rail, still easily readable.
 
 ## v1.2.2 — 2026-09-08
 

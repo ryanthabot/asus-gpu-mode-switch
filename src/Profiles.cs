@@ -292,7 +292,7 @@ namespace GpuModeSwitch
             Reload();
         }
 
-        // v1.3.0: re-derives the bar's surfaces from the live Ui palette
+        // v1.2.3: re-derives the bar's surfaces from the live Ui palette
         // (called by the host's ApplyTheme so the Optimize deck follows a
         // theme change; the buttons repaint through StyleToolButton).
         public void ApplyTheme()

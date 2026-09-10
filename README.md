@@ -1,6 +1,6 @@
 # Big's GPU Switch & Game Optimizer — "Go Time" & "Eco Mode"
 
-**ONE app, both modes**: **`Big's GPU Switch & Game Optimizer.exe`** (v1.2.3;
+**ONE app, both modes**: **`Big's GPU Switch & Game Optimizer.exe`** (v1.2.4;
 formerly `GPU Mode Switch.exe`) switches the
 **GPU Mode** on ASUS laptops — the same Standard / Eco switch that lives in
 *Armoury Crate → Devices → System Settings → GPU Performance* — without
@@ -21,6 +21,12 @@ the old two-executable pair (Go Time.exe / Eco Mode.exe) is retired.
 > Profile-bar-colored column headers, Segoe UI Semibold buttons); and the
 > header's "Connected via" chip alignment fixed. Details in
 > `CHANGELOG.md`.
+
+> **v1.2.4** — **popup chrome parity**: Session History and Log Browser now
+> use the main window's own chrome — borderless with rounded corners, a
+> custom cyan title strip that drags the window (double-click =
+> maximize/restore), custom **—** / **✕** caption buttons, and edge/corner
+> resizing while borderless.
 
 | Mode | What it does |
 |---|---|

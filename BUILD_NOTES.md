@@ -460,3 +460,26 @@ re-testing.
 - **Published:** exe deployed to `D:\OneDrive\Desktop New\` on black-ice
   (old `GPU Mode Switch.exe` removed); `main` + tag `v1.2.3` pushed to
   `origin` (github.com/ryanthabot) with a GitHub Release carrying the exe.
+
+## Round v1.2.4 — popup chrome parity (2026-09-10)
+
+- **Goal (owner):** "have it visually match the look of the main app" — the
+  Session History / Log Browser popups moved from dark-native chrome to the
+  main window's full custom chrome.
+- **Implementation:** shared `PopupChrome` helper (Theme.cs): borderless +
+  22px rounded Region (ctor + OnResize), WM_NCHITTEST 8px edge/corner
+  resize (disabled while maximized), header-strip drag
+  (WM_NCLBUTTONDOWN/HTCAPTION), —/✕ caption-button recipe. Both popups:
+  46px header (title Segoe UI 14f Bold Ui.Cyan), double-click header =
+  maximize/restore, ✕ close, — minimize, `Text` kept for taskbar,
+  DarkChrome.Apply removed, `ApplyTheme()` extended to the new chrome.
+  MainForm left on its own (identical) code — routing it through the
+  helper was not behavior-identical (maximized guard).
+- **Harness:** 81/81 — borderless/region/corner-pixel checks, header
+  layout + typography, caption button recipe, drag + double-click wiring,
+  9-case HitTestEdge mapping, maximized guard, ToggleMaximize, ApplyTheme,
+  synthetic data load, StyleToolButton intact (3/3 + 5/5).
+- **Verification on black-ice:** screenshots of both popups open over the
+  app (SSH/schtasks only; nothing ran on the builder).
+- **Published:** main + tag `v1.2.4` + GitHub Release (exe attached);
+  exe deployed to `D:\OneDrive\Desktop New\` on black-ice.

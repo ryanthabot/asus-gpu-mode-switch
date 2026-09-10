@@ -145,7 +145,7 @@ namespace GpuModeSwitch
 {
     internal static class Program
     {
-        public const string Version = "1.2.3";
+        public const string Version = "1.2.4";
 
         [STAThread]
         private static void Main(string[] args)

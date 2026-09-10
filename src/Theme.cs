@@ -277,6 +277,116 @@ namespace GpuModeSwitch
         }
     }
 
+    // Borderless chrome for the popup forms (v1.2.3 popup upgrade): the
+    // exact pattern the main window has used since v1.2.0, factored out
+    // so the Session History / Log Browser windows can share it instead
+    // of duplicating the P/Invokes and hit-test math per form.
+    internal static class PopupChrome
+    {
+        private const int WmNcHitTest = 0x84;
+        private const int HtClient = 1;
+        private const int HtLeft = 10;
+        private const int HtRight = 11;
+        private const int HtTop = 12;
+        private const int HtTopLeft = 13;
+        private const int HtTopRight = 14;
+        private const int HtBottom = 15;
+        private const int HtBottomLeft = 16;
+        private const int HtBottomRight = 17;
+
+        [DllImport("user32.dll")]
+        private static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        // Wires nothing by itself - this is the recipe in one place
+        // (the popup forms follow it in their constructors):
+        //   ctor:     FormBorderStyle.None + ShowInTaskbar + BackColor,
+        //             WindowIcons.Apply, PopupChrome.Round(this)
+        //   WndProc:  base.WndProc(ref m);
+        //             PopupChrome.HitTestEdge(this, ref m);
+        //   OnResize: base.OnResize(e); PopupChrome.Round(this);
+        //   header:   PopupChrome.MakeDraggable(headerPanel, this) +
+        //             MakeCaptionButton pairs, positioned Width-76/Width-40
+        public static void Enable(Form f)
+        {
+            // intentionally empty: every form wires its own pieces above
+        }
+
+        // WM_NCHITTEST edge mapping for a borderless form (the main
+        // window's WndProc logic). Call from the form's WndProc AFTER
+        // base.WndProc(ref m): when the message is WM_NCHITTEST and the
+        // base hit test said "client" while the point sits in one of the
+        // 8px edge/corner bands, the result is rewritten to the matching
+        // HT* resize zone. Skipped while maximized - a maximized window
+        // does not edge-resize, like the native caption the popups used
+        // to have. Returns true when the message was handled.
+        public static bool HitTestEdge(Form f, ref Message m)
+        {
+            if (f == null || m.Msg != WmNcHitTest) return false;
+            if (f.WindowState == FormWindowState.Maximized) return true;
+            if ((int)m.Result == HtClient)
+            {
+                int lp = m.LParam.ToInt32();
+                Point pt = f.PointToClient(new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF)));
+                int e = 8;
+                bool l = pt.X <= e, r = pt.X >= f.ClientSize.Width - e;
+                bool t = pt.Y <= e, b = pt.Y >= f.ClientSize.Height - e;
+                if (t && l) m.Result = (IntPtr)HtTopLeft;
+                else if (t && r) m.Result = (IntPtr)HtTopRight;
+                else if (b && l) m.Result = (IntPtr)HtBottomLeft;
+                else if (b && r) m.Result = (IntPtr)HtBottomRight;
+                else if (l) m.Result = (IntPtr)HtLeft;
+                else if (r) m.Result = (IntPtr)HtRight;
+                else if (t) m.Result = (IntPtr)HtTop;
+                else if (b) m.Result = (IntPtr)HtBottom;
+            }
+            return true;
+        }
+
+        // Applies the 22px rounded window region for the CURRENT client
+        // size (ctor + OnResize) - the main window's exact corner radius.
+        public static void Round(Form f)
+        {
+            if (f == null) return;
+            Region old = f.Region;
+            f.Region = new Region(UiShapes.RoundRect(0, 0, f.ClientSize.Width, f.ClientSize.Height, 22));
+            if (old != null) old.Dispose();
+        }
+
+        // Bare-panel drag handle (the main window's MakeDraggable):
+        // press with the left button anywhere on the chrome surface and
+        // the window follows, exactly like a native title bar.
+        public static void MakeDraggable(Control c, Form f)
+        {
+            if (c == null || f == null) return;
+            c.MouseDown += delegate(object s, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    ReleaseCapture();
+                    SendMessage(f.Handle, 0xA1, (IntPtr)0x2, IntPtr.Zero);   // WM_NCLBUTTONDOWN, HTCAPTION
+                }
+            };
+        }
+
+        // One — / ✕ caption button, styled like the main window's pair:
+        // flat, borderless, dim Segoe UI 10f glyph on the header surface.
+        // Visual only - the caller wires its own Click action.
+        public static void MakeCaptionButton(Button b, string glyph)
+        {
+            b.Text = glyph;
+            b.FlatStyle = FlatStyle.Flat;
+            b.FlatAppearance.BorderSize = 0;
+            b.ForeColor = Ui.TextDim;
+            b.BackColor = Ui.Bg;
+            b.Font = new Font("Segoe UI", 10f);
+            b.Size = new Size(34, 28);
+            b.TabStop = false;
+        }
+    }
+
     // Small shared drawing helpers.
     internal static class UiShapes
     {

@@ -60,7 +60,22 @@ existing history is preserved.
    scheme as the Session History column bar and the tool buttons:
    discrete on the dark rail, still easily readable.
 
-## v1.2.2 — 2026-09-08
+## v1.2.4 — 2026-09-10
+
+**Popups now wear the main app's own chrome.** Session History and Log
+Browser are rebuilt borderless to visually match the main window exactly:
+rounded 22px corners, a custom 46px header strip ("SESSION HISTORY" /
+"LOG BROWSER" in the main title style — Segoe UI 14f bold cyan) that drags
+the window and double-clicks to maximize/restore, custom **—** and **✕**
+caption buttons (minimize / close) top-right, and 8px edge/corner resize
+while borderless (shared `PopupChrome` helper in Theme.cs; edge zones
+disable while maximized, like the native caption behaved). DarkChrome DWM
+title-bar calls removed (no title bar left); everything inside — toolbar,
+owner-drawn dark list headers, detail pane, status bar, theming — is
+unchanged. Native maximize was folded into the header double-click; the
+caption keeps exactly the main app's two buttons.
+
+## v1.2.3 — 2026-09-10
 
 **Field fixes from the v1.2.1 black-ice logs plus one startup hang found
 during verification** (five repairs, one feature):

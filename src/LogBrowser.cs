@@ -38,6 +38,9 @@ namespace GpuModeSwitch
     // Log-history browser: file list (both apps, newest first), read-only
     // viewer with find-next, search across all logs, open-in-Explorer and
     // copy. Colors are inline at the call sites, exactly as in Forms.cs.
+    // v1.2.3: borderless with the main window's custom chrome (PopupChrome)
+    // - rounded region, 8px edge resize, drag/header strip with — / ✕
+    // caption buttons instead of the native dark title bar.
     // ---------------------------------------------------------------------
     internal class LogBrowserForm : Form
     {
@@ -48,6 +51,10 @@ namespace GpuModeSwitch
         // Characters kept from each matching line in the results list.
         private const int MaxSnippetChars = 300;
 
+        private readonly Panel _header = new Panel();      // custom caption strip
+        private readonly Label _title = new Label();
+        private readonly Button _x = new Button();         // ✕ close
+        private readonly Button _min = new Button();       // — minimize, left of X
         private readonly ListView _files = new ListView();
         private readonly ListView _results = new ListView();
         private readonly TextBox _viewer = new TextBox();
@@ -72,8 +79,8 @@ namespace GpuModeSwitch
 
         public LogBrowserForm()
         {
-            Text = "Log History";
-            FormBorderStyle = FormBorderStyle.Sizable;
+            Text = "Log browser";            // taskbar / mouse-over only
+            FormBorderStyle = FormBorderStyle.None;   // borderless: custom chrome like the main window
             MaximizeBox = true;
             MinimizeBox = true;
             ShowInTaskbar = true;
@@ -83,11 +90,12 @@ namespace GpuModeSwitch
             BackColor = Ui.PopupBack;
             Font = new Font("Segoe UI", 9f);
             WindowIcons.Apply(this);
-            DarkChrome.Apply(this);     // native title bar follows the dark body
+            PopupChrome.Round(this);        // 22px rounded corners, the main window's radius
 
             // v1.2.3: the form is constructed fresh on every open, so colors
             // read here follow the live theme; the public ApplyTheme covers a
             // form kept open across a theme change.
+            BuildHeader();
             BuildToolbar();
             BuildFileList();
             BuildViewer();
@@ -138,6 +146,44 @@ namespace GpuModeSwitch
         }
 
         // ---- UI construction ------------------------------------------------
+
+        // Custom caption strip (v1.2.3): replaces the native title bar of
+        // the borderless window - drag surface + — / ✕ buttons, styled
+        // exactly like the main window's header.
+        private void BuildHeader()
+        {
+            _header.Dock = DockStyle.Top;
+            _header.Height = 46;
+            _header.BackColor = Ui.Bg;
+
+            _title.Text = "LOG BROWSER";
+            _title.Font = new Font("Segoe UI", 14f, FontStyle.Bold);
+            _title.ForeColor = Ui.Cyan;
+            _title.BackColor = Color.Transparent;
+            _title.AutoSize = false;
+            _title.Size = new Size(360, 30);
+            _title.TextAlign = ContentAlignment.MiddleLeft;
+            _title.AutoEllipsis = true;
+            _title.Location = new Point(18, 8);
+
+            PopupChrome.MakeCaptionButton(_min, "\u2014");   // —
+            PopupChrome.MakeCaptionButton(_x, "\u2715");     // ✕
+            _min.Click += delegate { WindowState = FormWindowState.Minimized; };
+            _x.Click += delegate { Close(); };
+            _min.Location = new Point(_header.Width - 76, 8);
+            _x.Location = new Point(_header.Width - 40, 8);
+            _header.Resize += delegate
+            {
+                _min.Location = new Point(_header.Width - 76, 8);
+                _x.Location = new Point(_header.Width - 40, 8);
+            };
+
+            _header.Controls.Add(_title);
+            _header.Controls.Add(_min);
+            _header.Controls.Add(_x);
+            PopupChrome.MakeDraggable(_header, this);
+            _header.DoubleClick += delegate { ToggleMaximize(); };
+        }
 
         private void BuildToolbar()
         {
@@ -318,6 +364,36 @@ namespace GpuModeSwitch
             layout.Controls.Add(_split, 0, 1);
             layout.Controls.Add(_status, 0, 2);
             Controls.Add(layout);
+            // added last: docks first (Top), so layout fills the rest under
+            // the header strip (same reverse-dock order the main window uses)
+            Controls.Add(_header);
+        }
+
+        // ---- custom chrome (v1.2.3) -----------------------------------------
+
+        // Borderless window: re-apply the rounded region on every resize
+        // (the main window's OnResize recipe).
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            PopupChrome.Round(this);
+        }
+
+        // Borderless window: the 8px edges resize like a native frame
+        // (shared helper, the main window's WM_NCHITTEST logic).
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            PopupChrome.HitTestEdge(this, ref m);
+        }
+
+        // Double-click on the header = the native caption's maximize
+        // toggle (the borderless strip replaces the title bar).
+        private void ToggleMaximize()
+        {
+            WindowState = WindowState == FormWindowState.Maximized
+                ? FormWindowState.Normal
+                : FormWindowState.Maximized;
         }
 
         // Re-derives every popup color from the live Ui palette (v1.2.3).
@@ -326,6 +402,10 @@ namespace GpuModeSwitch
         public void ApplyTheme()
         {
             BackColor = Ui.PopupBack;
+            _header.BackColor = Ui.Bg;          // custom caption strip follows the main window's bg
+            _title.ForeColor = Ui.Cyan;
+            _min.ForeColor = Ui.TextDim; _min.BackColor = Ui.Bg;
+            _x.ForeColor = Ui.TextDim; _x.BackColor = Ui.Bg;
             _toolbar.BackColor = Ui.PopupBack;
             _status.BackColor = Ui.PopupBack;
             _status.ForeColor = Ui.PopupTextDim;

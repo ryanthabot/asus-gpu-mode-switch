@@ -23,6 +23,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 
@@ -75,6 +76,94 @@ namespace GpuModeSwitch
         public static Color CardGradA = Color.FromArgb(20, 24, 34);
         public static Color CardGradB = Color.FromArgb(20, 24, 34);
         public static bool CardGradEnabled = false;
+
+        // Popup surfaces (v1.3.0 popup restyle): the Session History / Log
+        // Browser windows, the profile bar and their lists. Defaults are the
+        // exact v1.1-v1.2 inline values, so an unthemed run renders identical.
+        public static Color PopupBack = Color.FromArgb(24, 24, 28);
+        public static Color PopupListBack = Color.FromArgb(14, 14, 16);
+        public static Color PopupListText = Color.FromArgb(205, 205, 210);
+        public static Color PopupListSelBack = Color.FromArgb(42, 42, 49);
+        public static Color PopupTextDim = Color.FromArgb(140, 140, 148);
+        public static Color PopupBorder = Color.FromArgb(90, 90, 98);
+        public static Color ToolBtnFace = Color.FromArgb(45, 45, 52);
+
+        // The one shared recipe for every small flat button in the popups
+        // (session history, log browser, profile bar and their dialogs).
+        // Visual only - callers keep their own Text/AutoSize/Click wiring.
+        // Reads Ui live so a freshly constructed popup follows the theme.
+        public static void StyleToolButton(Button b, bool primary)
+        {
+            b.FlatStyle = FlatStyle.Flat;
+            b.FlatAppearance.BorderColor = primary ? Ui.Cyan : Ui.CardBorder;
+            b.ForeColor = primary ? Ui.TextHi : Ui.ProfileBarText;
+            b.BackColor = Ui.ToolBtnFace;
+            b.Font = new Font("Segoe UI Semibold", 9f);
+            b.Padding = new Padding(10, 5, 10, 5);
+            b.Cursor = Cursors.Hand;
+        }
+
+        // ---- shared owner-drawn ListView painting (popup restyle) ---------
+        // Wired as DrawColumnHeader / DrawItem / DrawSubItem handlers; the
+        // header gets the profile-bar surface + semibold text, the rows keep
+        // the dark list colors (selection = the subtle hover tone).
+
+        public static void DrawListHeader(object sender, DrawListViewColumnHeaderEventArgs e)
+        {
+            using (SolidBrush back = new SolidBrush(Ui.ProfileBarBack))
+            {
+                e.Graphics.FillRectangle(back, e.Bounds);
+            }
+            using (Pen sep = new Pen(Ui.PopupBorder))
+            {
+                e.Graphics.DrawLine(sep, e.Bounds.Right - 1, e.Bounds.Top, e.Bounds.Right - 1, e.Bounds.Bottom - 1);
+                e.Graphics.DrawLine(sep, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right - 1, e.Bounds.Bottom - 1);
+            }
+            using (Font f = new Font("Segoe UI Semibold", 9f))
+            {
+                Rectangle textRect = new Rectangle(e.Bounds.X + 6, e.Bounds.Y, e.Bounds.Width - 12, e.Bounds.Height);
+                TextRenderer.DrawText(e.Graphics, e.Header.Text, f, textRect, Ui.ProfileBarText,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix |
+                    AlignFlags(e.Header.TextAlign));
+            }
+            e.DrawDefault = false;
+        }
+
+        public static void DrawListItem(object sender, DrawListViewItemEventArgs e)
+        {
+            using (SolidBrush back = new SolidBrush(
+                (e.State & ListViewItemStates.Selected) != 0 ? Ui.PopupListSelBack : Ui.PopupListBack))
+            {
+                e.Graphics.FillRectangle(back, e.Bounds);
+            }
+            e.DrawDefault = false;
+        }
+
+        public static void DrawListCell(object sender, DrawListViewSubItemEventArgs e)
+        {
+            bool sel = (e.ItemState & ListViewItemStates.Selected) != 0;
+            using (SolidBrush back = new SolidBrush(sel ? Ui.PopupListSelBack : Ui.PopupListBack))
+            {
+                e.Graphics.FillRectangle(back, e.Bounds);
+            }
+            TextFormatFlags flags = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+            if (e.Header != null) flags |= AlignFlags(e.Header.TextAlign);
+            TextRenderer.DrawText(e.Graphics, e.SubItem.Text,
+                e.SubItem.Font != null ? e.SubItem.Font : e.Item.ListView.Font,
+                new Rectangle(e.Bounds.X + 6, e.Bounds.Y, e.Bounds.Width - 12, e.Bounds.Height),
+                Ui.PopupListText, flags);
+            e.DrawDefault = false;
+        }
+
+        private static TextFormatFlags AlignFlags(HorizontalAlignment align)
+        {
+            switch (align)
+            {
+                case HorizontalAlignment.Center: return TextFormatFlags.HorizontalCenter;
+                case HorizontalAlignment.Right: return TextFormatFlags.Right;
+                default: return TextFormatFlags.Left;
+            }
+        }
 
         // Lightens/darkens a color by a 0..1 fraction (positive = lighter).
         public static Color Shift(Color c, float amount)
@@ -139,6 +228,51 @@ namespace GpuModeSwitch
             catch
             {
                 // exe icon unavailable for some reason - the generic one is fine
+            }
+        }
+    }
+
+    // Dark native chrome for the popup forms (v1.3.0 restyle): flips the
+    // DWM immersive-dark-mode attribute so the native title bar matches the
+    // dark body. Attribute 20 is the current number; Windows builds older
+    // than ~2004 only accept 19, so that is the fallback. Dark scrollbars
+    // have no documented registry-free path on .NET 4, so they stay native.
+    internal static class DarkChrome
+    {
+        private const int AttrDarkModeOld = 19;
+        private const int AttrDarkMode = 20;
+
+        [DllImport("dwmapi.dll", PreserveSig = true)]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+        // Best-effort: call in the form constructor (before the handle
+        // exists it hooks Load instead) - a failure just keeps the light bar.
+        public static void Apply(Form form)
+        {
+            if (form == null || form.IsDisposed) return;
+            if (form.IsHandleCreated)
+            {
+                TrySetDark(form.Handle);
+            }
+            else
+            {
+                form.Load += delegate { if (!form.IsDisposed) TrySetDark(form.Handle); };
+            }
+        }
+
+        private static void TrySetDark(IntPtr hwnd)
+        {
+            try
+            {
+                int on = 1;
+                if (DwmSetWindowAttribute(hwnd, AttrDarkMode, ref on, sizeof(int)) != 0)
+                {
+                    DwmSetWindowAttribute(hwnd, AttrDarkModeOld, ref on, sizeof(int));
+                }
+            }
+            catch
+            {
+                // DWM unavailable (older Windows / session state) - cosmetic only
             }
         }
     }

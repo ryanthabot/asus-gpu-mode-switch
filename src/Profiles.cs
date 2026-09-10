@@ -238,6 +238,7 @@ namespace GpuModeSwitch
     public class ProfileBar : UserControl
     {
         private readonly ComboBox _combo;
+        private readonly FlowLayoutPanel _bar;
         private readonly Button _applyBtn;
         private readonly Button _saveBtn;
         private readonly Button _deleteBtn;
@@ -271,24 +272,45 @@ namespace GpuModeSwitch
             _refreshBtn = MakeToolButton("Refresh");
             _refreshBtn.Click += delegate { Reload(); };
 
-            BackColor = Color.FromArgb(24, 24, 28);
+            BackColor = Ui.ProfileBarBack;
             Font = new Font("Segoe UI", 9f);
             Size = new Size(560, 44);
             TabStop = false;
 
             // One FlowLayoutPanel strip - the same proven pattern as the
             // LogForm bars (deterministic at any DPI, buttons never vanish).
-            FlowLayoutPanel bar = MakeBar();
-            bar.Dock = DockStyle.Fill;
-            bar.Controls.Add(MakeFieldLabel("Profile:"));
-            bar.Controls.Add(_combo);
-            bar.Controls.Add(_applyBtn);
-            bar.Controls.Add(_saveBtn);
-            bar.Controls.Add(_deleteBtn);
-            bar.Controls.Add(_refreshBtn);
-            Controls.Add(bar);
+            _bar = MakeBar();
+            _bar.Dock = DockStyle.Fill;
+            _bar.Controls.Add(MakeFieldLabel("Profile:"));
+            _bar.Controls.Add(_combo);
+            _bar.Controls.Add(_applyBtn);
+            _bar.Controls.Add(_saveBtn);
+            _bar.Controls.Add(_deleteBtn);
+            _bar.Controls.Add(_refreshBtn);
+            Controls.Add(_bar);
 
             Reload();
+        }
+
+        // v1.3.0: re-derives the bar's surfaces from the live Ui palette
+        // (called by the host's ApplyTheme so the Optimize deck follows a
+        // theme change; the buttons repaint through StyleToolButton).
+        public void ApplyTheme()
+        {
+            BackColor = Ui.ProfileBarBack;
+            _bar.BackColor = Ui.ProfileBarBack;
+            foreach (Control c in _bar.Controls)
+            {
+                Label l = c as Label;
+                if (l != null)
+                {
+                    l.BackColor = Ui.ProfileBarBack;
+                    l.ForeColor = Ui.ProfileBarDim;
+                }
+                Button b = c as Button;
+                if (b != null) Ui.StyleToolButton(b, false);
+            }
+            Invalidate(true);
         }
 
         // Re-lists the saved profiles (fresh from the store). The previous
@@ -459,22 +481,20 @@ namespace GpuModeSwitch
             c.DropDownStyle = ComboBoxStyle.DropDownList;
             c.Width = 190;
             c.FlatStyle = FlatStyle.Flat;
-            c.BackColor = Color.FromArgb(45, 45, 52);
-            c.ForeColor = Color.FromArgb(220, 220, 226);
+            c.BackColor = Ui.ToolBtnFace;
+            c.ForeColor = Ui.ProfileBarText;
             c.Margin = new Padding(4, 8, 4, 8);
             return c;
         }
 
+        // The one shared flat-button recipe (Ui.StyleToolButton) - sizing and
+        // margins stay local so the bar keeps its own rhythm.
         private static Button MakeToolButton(string text)
         {
             Button b = new Button();
             b.Text = text;
             b.AutoSize = true;
-            b.FlatStyle = FlatStyle.Flat;
-            b.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
-            b.ForeColor = Color.FromArgb(210, 210, 216);
-            b.BackColor = Color.FromArgb(45, 45, 52);
-            b.Padding = new Padding(6, 4, 6, 4);
+            Ui.StyleToolButton(b, false);
             b.Margin = new Padding(4, 8, 4, 8);
             b.TabStop = false;
             return b;
@@ -485,8 +505,8 @@ namespace GpuModeSwitch
             Label l = new Label();
             l.Text = text;
             l.AutoSize = true;
-            l.ForeColor = Color.FromArgb(140, 140, 148);
-            l.BackColor = Color.FromArgb(24, 24, 28);
+            l.ForeColor = Ui.ProfileBarDim;
+            l.BackColor = Ui.ProfileBarBack;
             l.TextAlign = ContentAlignment.MiddleLeft;
             l.Margin = new Padding(12, 10, 2, 4);
             return l;
@@ -497,7 +517,7 @@ namespace GpuModeSwitch
             FlowLayoutPanel bar = new FlowLayoutPanel();
             bar.FlowDirection = FlowDirection.LeftToRight;
             bar.WrapContents = false;       // one horizontal strip
-            bar.BackColor = Color.FromArgb(24, 24, 28);
+            bar.BackColor = Ui.ProfileBarBack;
             return bar;
         }
 
@@ -520,18 +540,19 @@ namespace GpuModeSwitch
                 ShowInTaskbar = false;
                 StartPosition = FormStartPosition.CenterParent;
                 ClientSize = new Size(360, 118);
-                BackColor = Color.FromArgb(24, 24, 28);
+                BackColor = Ui.PopupBack;
                 Font = new Font("Segoe UI", 9f);
+                DarkChrome.Apply(this);     // native title bar follows the dark body
 
                 Label prompt = new Label();
                 prompt.Text = "Profile name:";
                 prompt.AutoSize = true;
-                prompt.ForeColor = Color.FromArgb(165, 165, 172);
-                prompt.BackColor = Color.FromArgb(24, 24, 28);
+                prompt.ForeColor = Ui.PopupTextDim;
+                prompt.BackColor = Ui.PopupBack;
                 prompt.Location = new Point(14, 14);
 
-                _box.BackColor = Color.FromArgb(14, 14, 16);
-                _box.ForeColor = Color.FromArgb(205, 205, 210);
+                _box.BackColor = Ui.PopupListBack;
+                _box.ForeColor = Ui.PopupListText;
                 _box.BorderStyle = BorderStyle.FixedSingle;
                 _box.Location = new Point(14, 36);
                 _box.Size = new Size(332, 23);
@@ -540,13 +561,13 @@ namespace GpuModeSwitch
                 _ok.Text = "OK";
                 _ok.Size = new Size(80, 28);
                 _ok.Location = new Point(182, 74);
-                StyleDialogButton(_ok);
+                Ui.StyleToolButton(_ok, false);
                 _ok.Click += delegate { AcceptName(); };
 
                 _cancel.Text = "Cancel";
                 _cancel.Size = new Size(80, 28);
                 _cancel.Location = new Point(266, 74);
-                StyleDialogButton(_cancel);
+                Ui.StyleToolButton(_cancel, false);
                 _cancel.Click += delegate { DialogResult = DialogResult.Cancel; };
 
                 Controls.Add(prompt);
@@ -580,15 +601,6 @@ namespace GpuModeSwitch
             private void UpdateOkState()
             {
                 _ok.Enabled = ProfileName.Length > 0;
-            }
-
-            private static void StyleDialogButton(Button b)
-            {
-                b.FlatStyle = FlatStyle.Flat;
-                b.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
-                b.ForeColor = Color.FromArgb(220, 220, 226);
-                b.BackColor = Color.FromArgb(45, 45, 52);
-                b.TabStop = false;
             }
         }
     }

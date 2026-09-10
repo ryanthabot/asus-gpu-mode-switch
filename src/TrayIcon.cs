@@ -12,13 +12,14 @@
 //  Wave 6 code (A18) instantiates it, so its fixed strings are Go
 //  Time-branded ("Open Go Time"). Eco Mode never creates one.
 //
-//  Fully decoupled from the UI: the five host callbacks are injected through
-//  the constructor (openWindow, applyEco, toggleOverlay, statusText,
-//  exitApp). A null callback only disables its menu item - nothing throws.
-//  This file references no Forms.cs types (only Log, UiShapes and the
-//  framework).
+//  Fully decoupled from the UI: the host callbacks are injected through the
+//  constructor (openWindow, applyEco, toggleOverlay, statusText, exitApp,
+//  plus the v1.3.0 optional restoreTrayApps / canRestoreTrayApps pair). A
+//  null callback only disables its menu item - nothing throws. This file
+//  references no Forms.cs types (only Log, UiShapes and the framework).
 //
-//  Menu: Open Go Time / - / Restore (Eco Mode) / Toggle overlay / Status
+//  Menu: Open Go Time / - / Restore (Eco Mode) / Restore tray apps (v1.3.0,
+//  disabled while nothing to restore) / Toggle overlay / Status
 //  (balloon tip showing statusText()) / - / Exit. Double-click on the icon
 //  = openWindow. The ContextMenuStrip is dark-themed with the same inline
 //  palette as the rest of the suite.
@@ -60,8 +61,11 @@ namespace GpuModeSwitch
         private readonly Action _toggleOverlay;
         private readonly Func<string> _statusText;
         private readonly Action _exitApp;
+        private readonly Action _restoreTrayApps;       // v1.3.0: restart the apps GO closed
+        private readonly Func<bool> _canRestoreTrayApps;
         private readonly NotifyIcon _notify = new NotifyIcon();
         private readonly ContextMenuStrip _menu = new ContextMenuStrip();
+        private ToolStripMenuItem _restoreTrayItem;   // assigned in BuildMenu (constructor call chain)
 
         private Icon _icon;          // wrapper around _iconHandle (or a system fallback)
         private IntPtr _iconHandle;  // HICON from Bitmap.GetHicon - freed in Dispose
@@ -69,13 +73,16 @@ namespace GpuModeSwitch
         private bool _disposed;
 
         public SessionTray(Action openWindow, Action applyEco, Action toggleOverlay,
-                           Func<string> statusText, Action exitApp)
+                           Func<string> statusText, Action exitApp,
+                           Action restoreTrayApps = null, Func<bool> canRestoreTrayApps = null)
         {
             _openWindow = openWindow;
             _applyEco = applyEco;
             _toggleOverlay = toggleOverlay;
             _statusText = statusText;
             _exitApp = exitApp;
+            _restoreTrayApps = restoreTrayApps;
+            _canRestoreTrayApps = canRestoreTrayApps;
 
             BuildMenu();
 
@@ -106,10 +113,21 @@ namespace GpuModeSwitch
             _menu.Items.Add(MakeItem("Open GPU Mode Switch", _openWindow, "open"));
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(MakeItem("Go Eco (switch + restore)", _applyEco, "go eco"));
+            _restoreTrayItem = MakeItem("Restore tray apps", _restoreTrayApps, "restore tray apps");
+            _menu.Items.Add(_restoreTrayItem);
             _menu.Items.Add(MakeItem("Toggle overlay", _toggleOverlay, "overlay toggle"));
             _menu.Items.Add(MakeStatusItem());
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(MakeItem("Exit", _exitApp, "exit"));
+
+            // "Restore tray apps" greys out while there is nothing to restore
+            // (the host answers through canRestoreTrayApps; a missing checker
+            // keeps the item available whenever the callback exists).
+            _menu.Opening += delegate(object s, System.ComponentModel.CancelEventArgs e)
+            {
+                _restoreTrayItem.Enabled = _restoreTrayApps != null &&
+                    (_canRestoreTrayApps == null || _canRestoreTrayApps());
+            };
         }
 
         // A null callback -> disabled item, no throw.

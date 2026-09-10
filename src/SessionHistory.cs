@@ -339,10 +339,14 @@ namespace GpuModeSwitch
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(880, 580);
             MinimumSize = new Size(720, 480);
-            BackColor = Color.FromArgb(24, 24, 28);
+            BackColor = Ui.PopupBack;
             Font = new Font("Segoe UI", 9f);
             WindowIcons.Apply(this);
+            DarkChrome.Apply(this);     // native title bar follows the dark body
 
+            // v1.3.0: the form is constructed fresh on every open, so colors
+            // read here follow the live theme; the public ApplyTheme covers a
+            // form kept open across a theme change.
             BuildToolbar();
             BuildList();
             BuildDetail();
@@ -393,16 +397,12 @@ namespace GpuModeSwitch
             _toolbar.Controls.Add(_copyBtn);
         }
 
-        // Flat dark buttons, same recipe as the LogForm/LogBrowser buttons.
+        // Flat dark buttons, the one shared recipe (Ui.StyleToolButton).
         private static void InitToolButton(Button b, string text)
         {
             b.Text = text;
             b.AutoSize = true;
-            b.FlatStyle = FlatStyle.Flat;
-            b.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
-            b.ForeColor = Color.FromArgb(210, 210, 216);
-            b.BackColor = Color.FromArgb(45, 45, 52);
-            b.Padding = new Padding(6, 4, 6, 4);
+            Ui.StyleToolButton(b, false);
             b.Margin = new Padding(2, 6, 2, 6);
             b.TabStop = false;
         }
@@ -412,12 +412,16 @@ namespace GpuModeSwitch
             _list.View = View.Details;
             _list.FullRowSelect = true;
             _list.MultiSelect = false;
-            _list.BackColor = Color.FromArgb(14, 14, 16);
-            _list.ForeColor = Color.FromArgb(205, 205, 210);
+            _list.BackColor = Ui.PopupListBack;
+            _list.ForeColor = Ui.PopupListText;
             _list.BorderStyle = BorderStyle.FixedSingle;
             _list.Dock = DockStyle.Fill;
             _list.Sorting = SortOrder.None;     // order comes from _records (newest first)
             _list.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+            _list.OwnerDraw = true;             // dark headers + dark rows (Ui helpers)
+            _list.DrawColumnHeader += Ui.DrawListHeader;
+            _list.DrawItem += Ui.DrawListItem;
+            _list.DrawSubItem += Ui.DrawListCell;
             _list.Columns.Add("When (local)", 140);
             _list.Columns.Add("App", 90);
             _list.Columns.Add("Mode", 90);
@@ -433,8 +437,8 @@ namespace GpuModeSwitch
             _detail.ReadOnly = true;
             _detail.ScrollBars = ScrollBars.Vertical;
             _detail.WordWrap = false;
-            _detail.BackColor = Color.FromArgb(14, 14, 16);
-            _detail.ForeColor = Color.FromArgb(205, 205, 210);
+            _detail.BackColor = Ui.PopupListBack;
+            _detail.ForeColor = Ui.PopupListText;
             _detail.BorderStyle = BorderStyle.FixedSingle;
             _detail.Font = new Font("Consolas", 9f);
             _detail.Dock = DockStyle.Fill;
@@ -444,8 +448,8 @@ namespace GpuModeSwitch
         private void BuildStatus()
         {
             _status.Text = "No history loaded yet.";
-            _status.ForeColor = Color.FromArgb(140, 140, 148);
-            _status.BackColor = Color.FromArgb(24, 24, 28);
+            _status.ForeColor = Ui.PopupTextDim;
+            _status.BackColor = Ui.PopupBack;
             _status.AutoSize = false;
             _status.Height = 26;
             _status.TextAlign = ContentAlignment.MiddleLeft;
@@ -459,9 +463,9 @@ namespace GpuModeSwitch
         {
             _split.Dock = DockStyle.Fill;
             _split.Orientation = Orientation.Horizontal;    // list over detail pane
-            _split.BackColor = Color.FromArgb(24, 24, 28);
-            _split.Panel1.BackColor = Color.FromArgb(24, 24, 28);
-            _split.Panel2.BackColor = Color.FromArgb(24, 24, 28);
+            _split.BackColor = Ui.PopupBack;
+            _split.Panel1.BackColor = Ui.PopupBack;
+            _split.Panel2.BackColor = Ui.PopupBack;
             _split.Panel1MinSize = 140;
             _split.Panel2MinSize = 120;
             _split.Panel1.Controls.Add(_list);
@@ -473,7 +477,7 @@ namespace GpuModeSwitch
             _toolbar.AutoSize = true;
             _toolbar.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             _toolbar.Padding = new Padding(10, 6, 10, 2);
-            _toolbar.BackColor = Color.FromArgb(24, 24, 28);
+            _toolbar.BackColor = Ui.PopupBack;
 
             TableLayoutPanel layout = new TableLayoutPanel();
             layout.Dock = DockStyle.Fill;
@@ -483,11 +487,36 @@ namespace GpuModeSwitch
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            layout.BackColor = Color.FromArgb(24, 24, 28);
+            layout.BackColor = Ui.PopupBack;
             layout.Controls.Add(_toolbar, 0, 0);
             layout.Controls.Add(_split, 0, 1);
             layout.Controls.Add(_status, 0, 2);
             Controls.Add(layout);
+        }
+
+        // Re-derives every popup color from the live Ui palette (v1.3.0).
+        // The constructor already reads Ui at build time - this exists for a
+        // form kept open while the theme changes (and for verification).
+        public void ApplyTheme()
+        {
+            BackColor = Ui.PopupBack;
+            _toolbar.BackColor = Ui.PopupBack;
+            _status.BackColor = Ui.PopupBack;
+            _status.ForeColor = Ui.PopupTextDim;
+            _split.BackColor = Ui.PopupBack;
+            _split.Panel1.BackColor = Ui.PopupBack;
+            _split.Panel2.BackColor = Ui.PopupBack;
+            _list.BackColor = Ui.PopupListBack;
+            _list.ForeColor = Ui.PopupListText;
+            _detail.BackColor = Ui.PopupListBack;
+            _detail.ForeColor = Ui.PopupListText;
+            foreach (Control c in _toolbar.Controls)
+            {
+                Button b = c as Button;
+                if (b != null) Ui.StyleToolButton(b, false);
+            }
+            _list.Invalidate();
+            Invalidate(true);
         }
 
         // ---- data -----------------------------------------------------------

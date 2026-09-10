@@ -80,10 +80,14 @@ namespace GpuModeSwitch
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(980, 640);
             MinimumSize = new Size(760, 520);
-            BackColor = Color.FromArgb(24, 24, 28);
+            BackColor = Ui.PopupBack;
             Font = new Font("Segoe UI", 9f);
             WindowIcons.Apply(this);
+            DarkChrome.Apply(this);     // native title bar follows the dark body
 
+            // v1.3.0: the form is constructed fresh on every open, so colors
+            // read here follow the live theme; the public ApplyTheme covers a
+            // form kept open across a theme change.
             BuildToolbar();
             BuildFileList();
             BuildViewer();
@@ -99,8 +103,15 @@ namespace GpuModeSwitch
             };
 
             // Splitter distances are only sane once the form has real bounds.
+            // The panel minimums must wait too: both SplitContainers sit at
+            // their default 150x100 size in the constructor and setting them
+            // there throws (SplitterDistance range check).
             Shown += delegate
             {
+                _split.Panel1MinSize = 240;
+                _split.Panel2MinSize = 240;
+                _rightSplit.Panel1MinSize = 120;
+                _rightSplit.Panel2MinSize = 100;
                 try { _split.SplitterDistance = 520; } catch { }
                 if (!_rightSplit.Panel2Collapsed) TryGiveResultsSpace();
             };
@@ -132,14 +143,14 @@ namespace GpuModeSwitch
         {
             Label find = new Label();
             find.Text = "Find:";
-            find.ForeColor = Color.FromArgb(165, 165, 172);
-            find.BackColor = Color.FromArgb(24, 24, 28);
+            find.ForeColor = Ui.PopupTextDim;
+            find.BackColor = Ui.PopupBack;
             find.AutoSize = true;
             find.Margin = new Padding(6, 9, 2, 3);
 
             _searchBox.Width = 250;
-            _searchBox.BackColor = Color.FromArgb(14, 14, 16);
-            _searchBox.ForeColor = Color.FromArgb(205, 205, 210);
+            _searchBox.BackColor = Ui.PopupListBack;
+            _searchBox.ForeColor = Ui.PopupListText;
             _searchBox.BorderStyle = BorderStyle.FixedSingle;
             _searchBox.Margin = new Padding(2, 6, 6, 6);
             _searchBox.KeyDown += delegate (object s, KeyEventArgs e)
@@ -173,16 +184,12 @@ namespace GpuModeSwitch
             _toolbar.Controls.Add(_refreshBtn);
         }
 
-        // Flat dark buttons, same recipe as the LogForm buttons.
+        // Flat dark buttons, the one shared recipe (Ui.StyleToolButton).
         private static void InitToolButton(Button b, string text, bool primary)
         {
             b.Text = text;
             b.AutoSize = true;
-            b.FlatStyle = FlatStyle.Flat;
-            b.FlatAppearance.BorderColor = Color.FromArgb(90, 90, 98);
-            b.ForeColor = primary ? Color.White : Color.FromArgb(210, 210, 216);
-            b.BackColor = Color.FromArgb(45, 45, 52);
-            b.Padding = new Padding(6, 4, 6, 4);
+            Ui.StyleToolButton(b, primary);
             b.Margin = new Padding(2, 6, 2, 6);
             b.TabStop = false;
         }
@@ -192,12 +199,16 @@ namespace GpuModeSwitch
             _files.View = View.Details;
             _files.FullRowSelect = true;
             _files.MultiSelect = false;
-            _files.BackColor = Color.FromArgb(14, 14, 16);
-            _files.ForeColor = Color.FromArgb(205, 205, 210);
+            _files.BackColor = Ui.PopupListBack;
+            _files.ForeColor = Ui.PopupListText;
             _files.BorderStyle = BorderStyle.FixedSingle;
             _files.Dock = DockStyle.Fill;
             _files.Sorting = SortOrder.None;        // order comes from _entries (newest first)
             _files.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+            _files.OwnerDraw = true;                // dark headers + dark rows (Ui helpers)
+            _files.DrawColumnHeader += Ui.DrawListHeader;
+            _files.DrawItem += Ui.DrawListItem;
+            _files.DrawSubItem += Ui.DrawListCell;
             _files.Columns.Add("App", 80);
             _files.Columns.Add("File", 250);
             _files.Columns.Add("Size (KB)", 85, HorizontalAlignment.Right);
@@ -211,8 +222,8 @@ namespace GpuModeSwitch
             _viewer.ReadOnly = true;
             _viewer.ScrollBars = ScrollBars.Both;
             _viewer.WordWrap = false;
-            _viewer.BackColor = Color.FromArgb(14, 14, 16);
-            _viewer.ForeColor = Color.FromArgb(205, 205, 210);
+            _viewer.BackColor = Ui.PopupListBack;
+            _viewer.ForeColor = Ui.PopupListText;
             _viewer.BorderStyle = BorderStyle.FixedSingle;
             _viewer.Font = new Font("Consolas", 9f);
             _viewer.Dock = DockStyle.Fill;
@@ -224,12 +235,16 @@ namespace GpuModeSwitch
             _results.View = View.Details;
             _results.FullRowSelect = true;
             _results.MultiSelect = false;
-            _results.BackColor = Color.FromArgb(14, 14, 16);
-            _results.ForeColor = Color.FromArgb(205, 205, 210);
+            _results.BackColor = Ui.PopupListBack;
+            _results.ForeColor = Ui.PopupListText;
             _results.BorderStyle = BorderStyle.FixedSingle;
             _results.Dock = DockStyle.Fill;
             _results.Sorting = SortOrder.None;
             _results.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+            _results.OwnerDraw = true;          // dark headers + dark rows (Ui helpers)
+            _results.DrawColumnHeader += Ui.DrawListHeader;
+            _results.DrawItem += Ui.DrawListItem;
+            _results.DrawSubItem += Ui.DrawListCell;
             _results.Columns.Add("App", 80);
             _results.Columns.Add("File", 200);
             _results.Columns.Add("Line", 55, HorizontalAlignment.Right);
@@ -237,8 +252,8 @@ namespace GpuModeSwitch
             _results.SelectedIndexChanged += OnResultSelected;
 
             _resultsCaption.Text = "Search results";
-            _resultsCaption.ForeColor = Color.FromArgb(140, 140, 148);
-            _resultsCaption.BackColor = Color.FromArgb(24, 24, 28);
+            _resultsCaption.ForeColor = Ui.PopupTextDim;
+            _resultsCaption.BackColor = Ui.PopupBack;
             _resultsCaption.AutoSize = false;
             _resultsCaption.Height = 22;
             _resultsCaption.TextAlign = ContentAlignment.MiddleLeft;
@@ -249,8 +264,8 @@ namespace GpuModeSwitch
         private void BuildStatus()
         {
             _status.Text = "Select a log on the left.";
-            _status.ForeColor = Color.FromArgb(140, 140, 148);
-            _status.BackColor = Color.FromArgb(24, 24, 28);
+            _status.ForeColor = Ui.PopupTextDim;
+            _status.BackColor = Ui.PopupBack;
             _status.AutoSize = false;
             _status.Height = 26;
             _status.TextAlign = ContentAlignment.MiddleLeft;
@@ -264,21 +279,19 @@ namespace GpuModeSwitch
         {
             _split.Dock = DockStyle.Fill;
             _split.Orientation = Orientation.Vertical;          // file list | viewer
-            _split.BackColor = Color.FromArgb(24, 24, 28);
-            _split.Panel1.BackColor = Color.FromArgb(24, 24, 28);
-            _split.Panel2.BackColor = Color.FromArgb(24, 24, 28);
-            _split.Panel1MinSize = 240;
-            _split.Panel2MinSize = 240;
+            _split.BackColor = Ui.PopupBack;
+            _split.Panel1.BackColor = Ui.PopupBack;
+            _split.Panel2.BackColor = Ui.PopupBack;
+            // (min sizes set in Shown - see the note there)
             _split.Panel1.Controls.Add(_files);
             _split.Panel2.Controls.Add(_rightSplit);
 
             _rightSplit.Dock = DockStyle.Fill;
             _rightSplit.Orientation = Orientation.Horizontal;   // viewer over results
-            _rightSplit.BackColor = Color.FromArgb(24, 24, 28);
-            _rightSplit.Panel1.BackColor = Color.FromArgb(24, 24, 28);
-            _rightSplit.Panel2.BackColor = Color.FromArgb(24, 24, 28);
-            _rightSplit.Panel1MinSize = 120;
-            _rightSplit.Panel2MinSize = 100;
+            _rightSplit.BackColor = Ui.PopupBack;
+            _rightSplit.Panel1.BackColor = Ui.PopupBack;
+            _rightSplit.Panel2.BackColor = Ui.PopupBack;
+            // (min sizes set in Shown - see the note there)
             _rightSplit.Panel2Collapsed = true;
             _rightSplit.Panel1.Controls.Add(_viewer);
             _rightSplit.Panel2.Controls.Add(_results);          // added first: fills the rest
@@ -290,7 +303,7 @@ namespace GpuModeSwitch
             _toolbar.AutoSize = true;
             _toolbar.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             _toolbar.Padding = new Padding(10, 6, 10, 2);
-            _toolbar.BackColor = Color.FromArgb(24, 24, 28);
+            _toolbar.BackColor = Ui.PopupBack;
 
             TableLayoutPanel layout = new TableLayoutPanel();
             layout.Dock = DockStyle.Fill;
@@ -300,11 +313,46 @@ namespace GpuModeSwitch
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            layout.BackColor = Color.FromArgb(24, 24, 28);
+            layout.BackColor = Ui.PopupBack;
             layout.Controls.Add(_toolbar, 0, 0);
             layout.Controls.Add(_split, 0, 1);
             layout.Controls.Add(_status, 0, 2);
             Controls.Add(layout);
+        }
+
+        // Re-derives every popup color from the live Ui palette (v1.3.0).
+        // The constructor already reads Ui at build time - this exists for a
+        // form kept open while the theme changes (and for verification).
+        public void ApplyTheme()
+        {
+            BackColor = Ui.PopupBack;
+            _toolbar.BackColor = Ui.PopupBack;
+            _status.BackColor = Ui.PopupBack;
+            _status.ForeColor = Ui.PopupTextDim;
+            _resultsCaption.BackColor = Ui.PopupBack;
+            _resultsCaption.ForeColor = Ui.PopupTextDim;
+            _split.BackColor = Ui.PopupBack;
+            _split.Panel1.BackColor = Ui.PopupBack;
+            _split.Panel2.BackColor = Ui.PopupBack;
+            _rightSplit.BackColor = Ui.PopupBack;
+            _rightSplit.Panel1.BackColor = Ui.PopupBack;
+            _rightSplit.Panel2.BackColor = Ui.PopupBack;
+            foreach (Control c in _toolbar.Controls)
+            {
+                Button b = c as Button;
+                if (b != null) Ui.StyleToolButton(b, b == _searchBtn);
+            }
+            foreach (ListView lv in new ListView[] { _files, _results })
+            {
+                lv.BackColor = Ui.PopupListBack;
+                lv.ForeColor = Ui.PopupListText;
+                lv.Invalidate();
+            }
+            _viewer.BackColor = Ui.PopupListBack;
+            _viewer.ForeColor = Ui.PopupListText;
+            _searchBox.BackColor = Ui.PopupListBack;
+            _searchBox.ForeColor = Ui.PopupListText;
+            Invalidate(true);
         }
 
         // ---- data -----------------------------------------------------------

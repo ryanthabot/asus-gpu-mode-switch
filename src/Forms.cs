@@ -596,24 +596,253 @@ namespace GpuModeSwitch
     // Known tray applications for the Go Time post-switch picker. Candidates
     // are matched case-insensitively against running process names: contains
     // for long names, exact for short ones (so "vgc" can't match randomly).
+    // v1.3.0: ten apps. Each row also carries a launch command (exe + args)
+    // so TrayApps can restore what it closed when Eco Mode applies; the
+    // default paths are field-verified and ResolveLaunch falls back to a
+    // versioned subfolder, the uninstall registry and a running-process
+    // path scan before giving up. Apps this run closed are remembered
+    // (session-scoped) and restarted exactly once on restore.
     // ---------------------------------------------------------------------
     internal class TrayAppInfo
     {
         public string Label;
         public string[] Candidates;
         public bool Running;
+
+        // Launch command for the restore path ("" = no default known).
+        public string LaunchExe = "";
+        public string LaunchArgs = "";
+
+        // Explicit watchdog services stopped before the kill (the Services
+        // registry scan still runs and its findings are merged in).
+        public string[] WatchdogServices = new string[0];
+
+        // Main-module path captured while the app was running - the most
+        // faithful restore source when it is set.
+        public string CapturedExe;
     }
 
     internal static class TrayApps
     {
+        private static readonly string PF = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        private static readonly string PF86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        private static readonly string LocalAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
         public static TrayAppInfo[] Known = new TrayAppInfo[]
         {
-            new TrayAppInfo { Label = "Parsec",         Candidates = new string[] { "parsec" } },
-            new TrayAppInfo { Label = "Google Drive",   Candidates = new string[] { "googledrivefs", "googledrivesync" } },
-            new TrayAppInfo { Label = "Jellyfin",       Candidates = new string[] { "jellyfin" } },
-            new TrayAppInfo { Label = "Riot Client",    Candidates = new string[] { "riotclient" } },
-            new TrayAppInfo { Label = "Riot Vanguard",  Candidates = new string[] { "vgtray", "vgc" } },
+            new TrayAppInfo { Label = "Parsec",         Candidates = new string[] { "parsec" },
+                LaunchExe = Path.Combine(PF, "Parsec", "parsecd.exe") },
+            new TrayAppInfo { Label = "Google Drive",   Candidates = new string[] { "googledrivefs", "googledrivesync" },
+                LaunchExe = Path.Combine(PF, "Google", "Drive File Stream", "GoogleDriveFS.exe"),   // versioned folder - resolved at runtime
+                LaunchArgs = "--startup_mode" },
+            new TrayAppInfo { Label = "Jellyfin",       Candidates = new string[] { "jellyfin" },
+                LaunchExe = Path.Combine(PF, "Jellyfin", "Server", "jellyfin-tray.exe") },
+            new TrayAppInfo { Label = "Riot Client",    Candidates = new string[] { "riotclient" },
+                LaunchExe = Path.Combine(LocalAppData, "Riot Client", "RiotClientServices.exe"),
+                LaunchArgs = "--launch-background-mode" },
+            new TrayAppInfo { Label = "Riot Vanguard",  Candidates = new string[] { "vgtray", "vgc" },
+                LaunchExe = Path.Combine(PF, "Riot Vanguard", "vgtray.exe") },
+            new TrayAppInfo { Label = "Wise Care 365",  Candidates = new string[] { "wisecare365", "wisetray", "wiseturbo" },
+                LaunchExe = Path.Combine(PF86, "Wise", "Wise Care 365", "WiseCare365.exe"),
+                WatchdogServices = new string[] { "WiseBootAssistant" } },
+            new TrayAppInfo { Label = "Overwolf",       Candidates = new string[] { "overwolf" },
+                LaunchExe = Path.Combine(PF86, "Overwolf", "OverwolfLauncher.exe"),
+                LaunchArgs = "-overwolfsilent",
+                WatchdogServices = new string[] { "OverwolfUpdater" } },
+            new TrayAppInfo { Label = "OpenBet LocatorT", Candidates = new string[] { "locatordesktop_windows_x86_64" },
+                LaunchExe = Path.Combine(LocalAppData, "OpenBet LocatorT", "locatordesktop_windows_x86_64.exe") },
+            new TrayAppInfo { Label = "NVIDIA Broadcast", Candidates = new string[] { "nvidia broadcast" },
+                LaunchExe = Path.Combine(PF, "NVIDIA Corporation", "NVIDIA Broadcast", "NVIDIA Broadcast.exe"),
+                LaunchArgs = "--process-start-args \"--launch-hidden\"" },
+            new TrayAppInfo { Label = "Wallpaper Engine", Candidates = new string[] { "wallpaper64", "wallpaper32", "wallpaperservice64", "wallpaperui", "webwallpaper64", "edgewallpaper64" },
+                LaunchExe = Path.Combine(PF86, "Steam", "steamapps", "common", "wallpaper_engine", "wallpaper64.exe"),
+                LaunchArgs = "-silent" },
         };
+
+        // Apps this run closed and must restore on Eco. Session-scoped.
+        private static readonly List<TrayAppInfo> _closed = new List<TrayAppInfo>();
+
+        // Launch seam: swap in a recorder to test the restore path without
+        // spawning real processes. (exe, args) -> void.
+        public static Action<string, string> LaunchProcess = delegate(string exe, string args)
+        {
+            if (!string.IsNullOrEmpty(args)) Process.Start(exe, args);
+            else Process.Start(exe);
+        };
+
+        public static bool HasClosedApps { get { return _closed.Count > 0; } }
+
+        public static void RememberClosed(TrayAppInfo app)
+        {
+            if (app == null) return;
+            foreach (TrayAppInfo a in _closed)
+            {
+                if (a == app) return;
+            }
+            _closed.Add(app);
+            Log.Chan("TRAY", "TrayApps: will restore " + app.Label + " on Eco");
+        }
+
+        public static void ClearClosed()
+        {
+            _closed.Clear();
+        }
+
+        // Restarts every remembered app (exe + args via ResolveLaunch), then
+        // clears the list. A failed start is a WARN - it never fails the Eco
+        // switch. Returns the labels actually started.
+        public static List<string> RestoreClosed()
+        {
+            List<string> started = new List<string>();
+            TrayAppInfo[] snapshot = _closed.ToArray();
+            _closed.Clear();
+            Detect();                       // skip anything that came back on its own
+            foreach (TrayAppInfo app in snapshot)
+            {
+                if (app.Running)
+                {
+                    Log.Chan("TRAY", "TrayApps: " + app.Label + " already running again - restore skipped");
+                    continue;
+                }
+                string exe = ResolveLaunch(app);
+                if (exe.Length == 0)
+                {
+                    Log.Warn("TRAY restore: no launch path known for " + app.Label + " - skipped");
+                    continue;
+                }
+                try
+                {
+                    LaunchProcess(exe, app.LaunchArgs);
+                    started.Add(app.Label);
+                    Log.Chan("TRAY", "TrayApps: restored " + app.Label + " (" + exe +
+                        (app.LaunchArgs.Length > 0 ? " " + app.LaunchArgs : "") + ")");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("TRAY restore: could not start " + app.Label + " - " + ex.Message);
+                }
+            }
+            return started;
+        }
+
+        // Best-known launch exe: the path captured while the app was running,
+        // the table default, the same exe in the highest-numbered subfolder of
+        // the default's parent (Google Drive's versioned install), an
+        // uninstall-registry hit, or "".
+        public static string ResolveLaunch(TrayAppInfo app)
+        {
+            if (app == null) return "";
+            if (!string.IsNullOrEmpty(app.CapturedExe) && File.Exists(app.CapturedExe)) return app.CapturedExe;
+            if (app.LaunchExe.Length > 0)
+            {
+                if (File.Exists(app.LaunchExe)) return app.LaunchExe;
+                string versioned = ResolveVersioned(app.LaunchExe);
+                if (versioned.Length > 0) return versioned;
+            }
+            return FindViaUninstallRegistry(app);
+        }
+
+        // C:\...\Drive File Stream\GoogleDriveFS.exe with the version folder
+        // missing: look for the same file name in the highest-named subfolder
+        // of the parent directory.
+        private static string ResolveVersioned(string defaultExe)
+        {
+            try
+            {
+                DirectoryInfo parent = new DirectoryInfo(Path.GetDirectoryName(defaultExe));
+                if (!parent.Exists) return "";
+                DirectoryInfo best = null;
+                foreach (DirectoryInfo sub in parent.GetDirectories())
+                {
+                    if (best == null || CompareFolderNames(sub.Name, best.Name) > 0) best = sub;
+                }
+                if (best == null) return "";
+                string candidate = Path.Combine(best.FullName, Path.GetFileName(defaultExe));
+                return File.Exists(candidate) ? candidate : "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        // Numeric-aware folder compare ("58.0" > "57.3.2"; non-numbers fall
+        // back to ordinal so the sort is stable either way).
+        private static int CompareFolderNames(string a, string b)
+        {
+            Version va, vb;
+            bool na = Version.TryParse(a, out va);
+            bool nb = Version.TryParse(b, out vb);
+            if (na && nb) return va.CompareTo(vb);
+            return string.CompareOrdinal(a, b);
+        }
+
+        // Uninstall-registry fallback: an entry whose DisplayName contains the
+        // app label yields DisplayIcon (quotes and ",0" stripped) or
+        // InstallLocation + the default file name.
+        private static string FindViaUninstallRegistry(TrayAppInfo app)
+        {
+            if (app.Label == null || app.Label.Length == 0) return "";
+            string[] roots =
+            {
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+            };
+            foreach (string root in roots)
+            {
+                foreach (RegistryHive hive in new RegistryHive[] { RegistryHive.LocalMachine, RegistryHive.CurrentUser })
+                {
+                    try
+                    {
+                        using (RegistryKey baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Default))
+                        using (RegistryKey uninstall = baseKey.OpenSubKey(root))
+                        {
+                            if (uninstall == null) continue;
+                            foreach (string sub in uninstall.GetSubKeyNames())
+                            {
+                                try
+                                {
+                                    using (RegistryKey k = uninstall.OpenSubKey(sub))
+                                    {
+                                        if (k == null) continue;
+                                        string name = k.GetValue("DisplayName") as string;
+                                        if (name == null || name.IndexOf(app.Label, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                                        string icon = CleanIconPath(k.GetValue("DisplayIcon") as string);
+                                        if (icon.Length > 0 && File.Exists(icon)) return icon;
+                                        string dir = k.GetValue("InstallLocation") as string;
+                                        string file = DefaultFileName(app);
+                                        if (dir != null && dir.Trim().Length > 0 && file.Length > 0)
+                                        {
+                                            string combined = Path.Combine(dir.Trim(), file);
+                                            if (File.Exists(combined)) return combined;
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            return "";
+        }
+
+        private static string CleanIconPath(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return "";
+            string p = raw.Trim().Trim('"');
+            int comma = p.LastIndexOf(',');
+            if (comma > 2) p = p.Substring(0, comma).Trim();    // drop ",0" / ",-1"
+            return p;
+        }
+
+        private static string DefaultFileName(TrayAppInfo app)
+        {
+            if (app.LaunchExe.Length > 0) return Path.GetFileName(app.LaunchExe);
+            if (app.CapturedExe != null && app.CapturedExe.Length > 0) return Path.GetFileName(app.CapturedExe);
+            return "";
+        }
 
         private static bool Matches(string processName, TrayAppInfo app)
         {
@@ -633,22 +862,30 @@ namespace GpuModeSwitch
 
         public static void Detect()
         {
-            List<string> names = new List<string>();
+            List<KeyValuePair<string, string>> procs = new List<KeyValuePair<string, string>>();
             foreach (Process p in Process.GetProcesses())
             {
-                try { names.Add(p.ProcessName.ToLowerInvariant()); } catch { }
+                string pn = "";
+                try { pn = p.ProcessName.ToLowerInvariant(); } catch { }
+                if (pn.Length > 0)
+                {
+                    string path = "";
+                    try { path = p.MainModule.FileName; } catch { }   // elevated/other-bitness processes refuse this
+                    procs.Add(new KeyValuePair<string, string>(pn, path));
+                }
                 try { p.Dispose(); } catch { }
             }
             foreach (TrayAppInfo a in Known)
             {
                 a.Running = false;
-                foreach (string pn in names)
+                foreach (KeyValuePair<string, string> proc in procs)
                 {
                     foreach (string cand in a.Candidates)
                     {
-                        if (cand.Length <= 4 ? pn == cand : pn.Contains(cand))
+                        if (cand.Length <= 4 ? proc.Key == cand : proc.Key.Contains(cand))
                         {
                             a.Running = true;
+                            if (proc.Value.Length > 0) a.CapturedExe = proc.Value;
                             break;
                         }
                     }
@@ -661,9 +898,15 @@ namespace GpuModeSwitch
         // Full close: stop any watchdog service whose binary matches the app
         // (Parsec's pservice relaunches parsecd on kill), kill the processes,
         // and re-check up to 3 rounds - refreshing the running state each time.
+        // v1.3.0: explicit WatchdogServices merge with the registry scan, and
+        // a fully-closed app is remembered for the Eco restore.
         public static void Close(TrayAppInfo app)
         {
-            List<string> services = FindMatchingServices(app);
+            List<string> services = new List<string>(app.WatchdogServices);
+            foreach (string s in FindMatchingServices(app))
+            {
+                if (!services.Contains(s)) services.Add(s);
+            }
 
             for (int round = 1; round <= 3; round++)
             {
@@ -703,6 +946,7 @@ namespace GpuModeSwitch
                 if (!app.Running)
                 {
                     Log.Chan("TRAY", "TrayApps: " + app.Label + " fully closed");
+                    RememberClosed(app);
                     return;
                 }
                 Log.Chan("TRAY", "TrayApps: " + app.Label + " still running - retrying");
@@ -975,6 +1219,7 @@ namespace GpuModeSwitch
         private readonly Label _homeTransport = new Label();
         private readonly ModeCard _goCard = new ModeCard();
         private readonly ModeCard _ecoCard = new ModeCard();
+        private readonly Button _homeRestoreTray = new Button();   // manual tray-app restore (GO session)
 
         // ---- optimize section ------------------------------------------------
         private readonly Panel _optSection = new Panel();
@@ -1348,12 +1593,18 @@ namespace GpuModeSwitch
                 }
             };
 
+            _homeRestoreTray.Text = "Restore tray apps";
+            StyleSecondaryButton(_homeRestoreTray, 150, 30);
+            _homeRestoreTray.Enabled = false;         // nothing to restore until GO closes some
+            _homeRestoreTray.Click += delegate { BeginRestoreTrayApps(); };
+
             MakeDraggable(_homeSection);
             _homeSection.Controls.Add(_homeCaption);
             _homeSection.Controls.Add(_homeStateBig);
             _homeSection.Controls.Add(_homeTransport);
             _homeSection.Controls.Add(_goCard);
             _homeSection.Controls.Add(_ecoCard);
+            _homeSection.Controls.Add(_homeRestoreTray);
         }
 
         // ---- construction: optimize -------------------------------------------
@@ -1899,6 +2150,7 @@ namespace GpuModeSwitch
             }
             foreach (Button b in new Button[] { _optCancel, _closeTray, _editFreezeList, _overlayBtn,
                                                 _resLogBtn, _resHistBtn, _resSessBtn, _resRestartBtn, _resTrayClose,
+                                                _homeRestoreTray,
                                                 _accentPick, _gradFromPick, _gradToPick, _navPick })
             {
                 b.FlatAppearance.BorderColor = Ui.CardBorder;
@@ -1907,6 +2159,9 @@ namespace GpuModeSwitch
 
             // monitor deck (v1.3.0): its rows/bars re-read the Ui.Mon* palette
             _monitorPanel.ApplyTheme();
+
+            // profile bar follows the popup/toolbar palette (v1.3.0)
+            _profileBar.ApplyTheme();
 
             SyncThemeUi();
             Invalidate(true);   // children included - owner-drawn controls repaint with the new Ui
@@ -2056,6 +2311,11 @@ namespace GpuModeSwitch
             int x = Math.Max(16, (W - total) / 2);
             _goCard.Location = new Point(x, 216);
             _ecoCard.Location = new Point(x + cardW + gap, 216);
+
+            // under the mode cards; clamped so it stays visible at MinimumSize
+            int restoreY = _goCard.Bottom + 14;
+            int restoreMax = Math.Max(216, _homeSection.Height - _homeRestoreTray.Height - 10);
+            _homeRestoreTray.Location = new Point((W - _homeRestoreTray.Width) / 2, Math.Min(restoreY, restoreMax));
         }
 
         private void LayoutOptimize()
@@ -2079,14 +2339,15 @@ namespace GpuModeSwitch
             _optBoxes[4].SetBounds(24, 44 + 2 * 34, colW, 30);
             y += _sysCard.Height + 12;
 
-            // tray apps: 5 switches + close button
-            _trayCard.SetBounds(x, y, inner, 40 + 3 * 34 + 40);
+            // tray apps: one switch per known app (two columns) + close button
+            int trayRows = (_trayBoxes.Count + 1) / 2;
+            _trayCard.SetBounds(x, y, inner, 40 + trayRows * 34 + 40);
             for (int i = 0; i < _trayBoxes.Count; i++)
             {
                 int row = i / 2, col = i % 2;
                 _trayBoxes[i].SetBounds(24 + col * (colW + 18), 44 + row * 34, colW, 30);
             }
-            _closeTray.Location = new Point(inner - 24 - _closeTray.Width, 44 + 3 * 34 + 4);
+            _closeTray.Location = new Point(inner - 24 - _closeTray.Width, 44 + trayRows * 34 + 4);
             y += _trayCard.Height + 12;
 
             // performance: freeze + edit-list, plan | wu-pause
@@ -2215,7 +2476,8 @@ namespace GpuModeSwitch
             _busyGlyph.Location = new Point((W - _busyGlyph.Width) / 2, 60);
             _busyTitle.SetBounds(24, 136, W - 48, 32);
 
-            int trayH = _resultTrayAvailable ? 118 : 0;
+            int trayRowCount = (_trayBoxes.Count + 1) / 2;
+            int trayH = _resultTrayAvailable ? 30 + trayRowCount * 32 : 0;
             _busyText.SetBounds(40, 176, W - 80, Math.Max(60, H - 176 - 70 - trayH));
 
             if (_resultTrayAvailable)
@@ -2394,6 +2656,7 @@ namespace GpuModeSwitch
             _homeTransport.Text = _transport;
             _goCard.CardActive = !_currentEco;
             _ecoCard.CardActive = _currentEco;
+            UpdateHomeRestoreTray();
         }
 
         // ---- optimize section --------------------------------------------------
@@ -2499,6 +2762,7 @@ namespace GpuModeSwitch
                     _trayBusy = false;
                     _resTrayClose.Enabled = true;
                     _closeTray.Enabled = true;
+                    UpdateHomeRestoreTray();
                 });
             });
         }
@@ -2511,6 +2775,40 @@ namespace GpuModeSwitch
                 if (_trayBoxes[i].Checked && TrayApps.Known[i].Running) list.Add(TrayApps.Known[i]);
             }
             return list;
+        }
+
+        // Manual tray-app restore (Home button / session tray menu): restarts
+        // exactly what this run closed, records the restore, refreshes the
+        // Home button's enabled state.
+        private void BeginRestoreTrayApps()
+        {
+            if (!TrayApps.HasClosedApps) return;
+            Log.Chan("TRAY", "TrayApps: manual restore requested");
+            RunBg(delegate
+            {
+                List<string> restored = TrayApps.RestoreClosed();
+                RecordTrayRestore(restored, "manual", _currentEco ? "Eco" : "Standard");
+                SafeInvoke(delegate { UpdateHomeRestoreTray(); });
+            });
+        }
+
+        private void UpdateHomeRestoreTray()
+        {
+            _homeRestoreTray.Enabled = TrayApps.HasClosedApps;
+        }
+
+        // One history row per restore round (the same recording pattern the
+        // GO run uses for its closes).
+        private static void RecordTrayRestore(List<string> restored, string context, string mode)
+        {
+            if (restored == null || restored.Count == 0) return;
+            SessionRecord rec = new SessionRecord();
+            rec.App = "GPU Mode Switch";
+            rec.Mode = mode;
+            rec.ActionsApplied = new List<string>();
+            foreach (string label in restored) rec.ActionsApplied.Add("Restored tray app: " + label);
+            rec.Result = "Tray apps restored (" + context + "): " + restored.Count + " app(s)";
+            SessionHistory.Append(rec);
         }
 
         // Background measurement (strictly read-only, the RunBg pattern): when
@@ -2809,6 +3107,16 @@ namespace GpuModeSwitch
                 // session leaves frozen processes, a foreign power plan or a
                 // paused Windows Update behind.
                 SessionSafety.RestoreAll();
+
+                // v1.3.0: restart the tray apps this run closed (session-
+                // scoped remember list) - best-effort, never fails the switch.
+                List<string> trayRestored = null;
+                if (r.Ok)
+                {
+                    trayRestored = TrayApps.RestoreClosed();
+                    if (trayRestored.Count > 0) r.Detail += "\n" + trayRestored.Count + " tray app(s) restored.";
+                    RecordTrayRestore(trayRestored, "eco", "Eco");
+                }
                 SwitchOutcome ro = r;
                 SafeInvoke(delegate
                 {
@@ -3112,7 +3420,9 @@ namespace GpuModeSwitch
                 BeginEcoApply,                              // "Go Eco" = full switch + restore
                 ToggleOverlay,                              // overlay toggle
                 SessionStatusText,                          // status balloon text
-                BeginExitApp);                              // clean shutdown
+                BeginExitApp,                               // clean shutdown
+                BeginRestoreTrayApps,                       // restore the tray apps GO closed
+                delegate { return TrayApps.HasClosedApps; });
             SessionSafety.ActiveTray = _tray;
             _tray.Show("GO session active");
             Log.Chan("TRAY", "session tray created (GO session active)");

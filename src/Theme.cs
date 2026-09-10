@@ -1,4 +1,4 @@
-//  Theme.cs  (v1.2.0)
+//  Theme.cs  (v1.2.0 / v1.3.0)
 //  -------------------
 //  The visual system of the unified app. Kept from v1.0.x-1.1: WindowIcons,
 //  UiShapes, ShimmerBar. Added in v1.2.0 (the redesign): Ui (the shared
@@ -10,29 +10,63 @@
 //  and SpinGlyph (busy spinner). Everything is owner-drawn GDI+ with
 //  double buffering; Segoe Fluent Icons / MDL2 glyphs are used when the
 //  font family exists and degrade to plain text otherwise.
+//
+//  v1.3.0: the palette is runtime-mutable - every Ui color is a plain
+//  static field the Theme page rewrites (ThemeState.ApplyUi) before the
+//  next repaint. ThemeState (also here) holds the persisted theme
+//  (%LOCALAPPDATA%\GpuModeSwitch\theme.txt, the same plain-text style as
+//  the monitor interval), ThemeSwatch is the clickable swatch chip of the
+//  Theme page and HeaderStripPanel paints the optional header gradient.
 
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.IO;
+using System.Text;
 using System.Windows.Forms;
 
 namespace GpuModeSwitch
 {
     // The shared palette + small drawing helpers for the unified deck.
+    // v1.3.0: every entry is a mutable static field - ThemeState.ApplyUi
+    // rewrites them and every owner-drawn control picks the new values up on
+    // repaint. The defaults below ARE the shipped Midnight look, so an
+    // unthemed run renders exactly like v1.2.
     internal static class Ui
     {
-        public static readonly Color Bg = Color.FromArgb(13, 15, 21);          // window
-        public static readonly Color BgSide = Color.FromArgb(9, 11, 16);       // sidebar rail
-        public static readonly Color Card = Color.FromArgb(20, 24, 34);        // card surface
-        public static readonly Color CardBorder = Color.FromArgb(41, 48, 66);
-        public static readonly Color TextHi = Color.FromArgb(238, 241, 248);
-        public static readonly Color Text = Color.FromArgb(190, 196, 210);
-        public static readonly Color TextDim = Color.FromArgb(122, 130, 150);
-        public static readonly Color Go = Color.FromArgb(255, 106, 61);        // Go Time orange
-        public static readonly Color Eco = Color.FromArgb(55, 214, 122);       // Eco green
-        public static readonly Color Cyan = Color.FromArgb(86, 199, 255);      // general accent
-        public static readonly Color Amber = Color.FromArgb(255, 184, 82);     // locked / warning
-        public static readonly Color Red = Color.FromArgb(255, 108, 108);
+        public static Color Bg = Color.FromArgb(13, 15, 21);          // window
+        public static Color BgSide = Color.FromArgb(9, 11, 16);       // sidebar rail
+        public static Color NavBack = Color.FromArgb(9, 11, 16);      // rail background (Theme page drives it; same as BgSide by default)
+        public static Color Card = Color.FromArgb(20, 24, 34);        // card surface
+        public static Color CardBorder = Color.FromArgb(41, 48, 66);
+        public static Color TextHi = Color.FromArgb(238, 241, 248);
+        public static Color Text = Color.FromArgb(190, 196, 210);
+        public static Color TextDim = Color.FromArgb(122, 130, 150);
+        public static Color Go = Color.FromArgb(255, 106, 61);        // Go Time orange
+        public static Color Eco = Color.FromArgb(55, 214, 122);       // Eco green
+        public static Color Cyan = Color.FromArgb(86, 199, 255);      // general accent
+        public static Color Amber = Color.FromArgb(255, 184, 82);     // locked / warning
+        public static Color Red = Color.FromArgb(255, 108, 108);
+
+        // Profile bar surface (Optimize deck) - kept here so every surface
+        // follows the active theme once its host reads them.
+        public static Color ProfileBarBack = Color.FromArgb(24, 24, 28);
+        public static Color ProfileBarText = Color.FromArgb(210, 210, 216);
+        public static Color ProfileBarDim = Color.FromArgb(140, 140, 148);
+
+        // Header backdrop: GradEnabled=false paints the solid Ui.Bg (the
+        // default - no visible gradient); true paints HeaderGradA ->
+        // HeaderGradB, diagonally when GradDiagonal.
+        public static Color HeaderGradA = Color.FromArgb(13, 15, 21);
+        public static Color HeaderGradB = Color.FromArgb(13, 15, 21);
+        public static bool GradEnabled;
+        public static bool GradDiagonal;
+
+        // Mode-card surface gradient hook (defaults = today's solid card).
+        public static Color CardGradA = Color.FromArgb(20, 24, 34);
+        public static Color CardGradB = Color.FromArgb(20, 24, 34);
+        public static bool CardGradEnabled = false;
 
         // Lightens/darkens a color by a 0..1 fraction (positive = lighter).
         public static Color Shift(Color c, float amount)
@@ -223,6 +257,10 @@ namespace GpuModeSwitch
             set { _accent = value; Invalidate(); }
         }
 
+        // Raised after Checked flipped (click or Space/Enter) - the Theme
+        // page's gradient switch applies the new state live through it.
+        public event EventHandler CheckedChanged;
+
         public bool Checked
         {
             get { return _checked; }
@@ -231,6 +269,7 @@ namespace GpuModeSwitch
                 if (_checked == value) return;
                 _checked = value;
                 StartAnim();
+                if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty);
             }
         }
 
@@ -351,7 +390,7 @@ namespace GpuModeSwitch
             Size = new Size(86, 58);
             Cursor = Cursors.Hand;
             TabStop = true;
-            BackColor = Ui.BgSide;   // the rail paints itself; corners must blend
+            BackColor = Ui.NavBack;   // the rail paints itself; corners must blend
         }
 
         public bool Active
@@ -377,6 +416,11 @@ namespace GpuModeSwitch
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
+            // full rail-color base so a theme change lands on repaint
+            using (SolidBrush rail = new SolidBrush(Ui.NavBack))
+            {
+                g.FillRectangle(rail, 0, 0, Width, Height);
+            }
             if (_active || _hover)
             {
                 using (SolidBrush bg = new SolidBrush(_active ? Color.FromArgb(27, 32, 46) : Color.FromArgb(18, 22, 32)))
@@ -786,6 +830,365 @@ namespace GpuModeSwitch
                 arc.EndCap = LineCap.Round;
                 g.DrawArc(arc, r, _angle, 110f);
             }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // v1.3.0 theme system
+    // ---------------------------------------------------------------------
+
+    // Clickable swatch chip (Theme page): rounded preview of one color with
+    // a caption and an accent underline; a 2px accent border marks the
+    // selected preset. Raises Click through the normal Control event.
+    internal class ThemeSwatch : Control
+    {
+        private bool _hover;
+        private bool _selected;
+
+        public Color Preview = Color.FromArgb(20, 24, 34);
+        public Color SwatchAccent = Ui.Cyan;
+
+        public ThemeSwatch()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.UserPaint |
+                     ControlStyles.ResizeRedraw, true);
+            Size = new Size(96, 54);
+            Cursor = Cursors.Hand;
+            TabStop = true;
+        }
+
+        public bool Selected
+        {
+            get { return _selected; }
+            set { _selected = value; Invalidate(); }
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                OnClick(EventArgs.Empty);
+            }
+            base.OnKeyDown(e);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (GraphicsPath p = UiShapes.RoundRect(0.5f, 0.5f, Width - 1, Height - 1, 10))
+            {
+                using (SolidBrush bg = new SolidBrush(_hover ? Ui.Shift(Preview, 0.08f) : Preview))
+                {
+                    g.FillPath(bg, p);
+                }
+                using (Pen border = new Pen(_selected ? SwatchAccent : Ui.CardBorder, _selected ? 2f : 1.2f))
+                {
+                    g.DrawPath(border, p);
+                }
+            }
+            using (SolidBrush bar = new SolidBrush(SwatchAccent))
+            {
+                g.FillRectangle(bar, 12, Height - 13, Width - 24, 3);
+            }
+            // caption contrast follows the preview luminance (light swatches
+            // like Frost's ice blue need dark text)
+            int lum = (Preview.R * 30 + Preview.G * 59 + Preview.B * 11) / 100;
+            Color cap = lum >= 128 ? Color.FromArgb(20, 24, 34) : Ui.TextHi;
+            TextRenderer.DrawText(g, Text, new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                new Rectangle(2, 0, Width - 4, Height - 16), cap,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        }
+    }
+
+    // Header backdrop (v1.3.0): the strip behind the title/chips paints the
+    // user's two-color gradient when Ui.GradEnabled is on, else the solid
+    // Ui.Bg. Fully UserPaint (like Card / NavButton) so BOTH the direct
+    // paints and the transparent-label composites go through this code -
+    // a stock Panel's native background fill would patch solid BackColor
+    // over the gradient behind the header labels (see the GradientLabel
+    // note about opaque compositing).
+    internal class HeaderStripPanel : Panel
+    {
+        public HeaderStripPanel()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.UserPaint |
+                     ControlStyles.ResizeRedraw, true);
+            BackColor = Ui.Bg;
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            // full custom fill; the base fill would flood the BackColor
+            Rectangle r = new Rectangle(0, 0, Math.Max(1, Width), Math.Max(1, Height));
+            if (Ui.GradEnabled)
+            {
+                using (LinearGradientBrush lgb = new LinearGradientBrush(r, Ui.HeaderGradA, Ui.HeaderGradB,
+                    Ui.GradDiagonal ? LinearGradientMode.ForwardDiagonal : LinearGradientMode.Horizontal))
+                {
+                    e.Graphics.FillRectangle(lgb, r);
+                }
+            }
+            else
+            {
+                using (SolidBrush b = new SolidBrush(Ui.Bg)) e.Graphics.FillRectangle(b, r);
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            // the background is all there is to paint
+        }
+    }
+
+    // One named palette. Midnight is the exact v1.2 default; the others are
+    // the built-in alternates the Theme page offers as swatches. Go / Eco /
+    // Amber / Red keep their semantic meaning in every preset - only the
+    // accent (preset Cyan) and the neutrals change identity.
+    internal sealed class ThemePreset
+    {
+        public string Name;
+        public Color Bg, BgSide, Card, CardBorder, TextHi, Text, TextDim, Go, Eco, Cyan, Amber, Red;
+    }
+
+    // Persisted theme state (v1.3.0): the active palette (from a preset or
+    // custom), the accent, the header gradient settings and the nav rail
+    // color. Saved as plain "key=value" lines in
+    // %LOCALAPPDATA%\GpuModeSwitch\theme.txt (the same best-effort style as
+    // the monitor interval) and applied to Ui BEFORE any UI is constructed,
+    // so a themed run never flashes the default palette first.
+    internal static class ThemeState
+    {
+        private static readonly string ThemeFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "GpuModeSwitch", "theme.txt");
+
+        public static readonly ThemePreset[] Presets = new ThemePreset[]
+        {
+            new ThemePreset
+            {
+                Name = "Midnight", Bg = Color.FromArgb(13, 15, 21), BgSide = Color.FromArgb(9, 11, 16),
+                Card = Color.FromArgb(20, 24, 34), CardBorder = Color.FromArgb(41, 48, 66),
+                TextHi = Color.FromArgb(238, 241, 248), Text = Color.FromArgb(190, 196, 210), TextDim = Color.FromArgb(122, 130, 150),
+                Go = Color.FromArgb(255, 106, 61), Eco = Color.FromArgb(55, 214, 122),
+                Cyan = Color.FromArgb(86, 199, 255), Amber = Color.FromArgb(255, 184, 82), Red = Color.FromArgb(255, 108, 108)
+            },
+            new ThemePreset
+            {
+                Name = "Carbon", Bg = Color.FromArgb(22, 21, 20), BgSide = Color.FromArgb(17, 16, 15),
+                Card = Color.FromArgb(30, 29, 27), CardBorder = Color.FromArgb(58, 55, 50),
+                TextHi = Color.FromArgb(240, 238, 233), Text = Color.FromArgb(198, 195, 188), TextDim = Color.FromArgb(130, 127, 120),
+                Go = Color.FromArgb(245, 130, 70), Eco = Color.FromArgb(74, 200, 116),
+                Cyan = Color.FromArgb(98, 206, 128), Amber = Color.FromArgb(255, 192, 104), Red = Color.FromArgb(255, 112, 106)
+            },
+            new ThemePreset
+            {
+                Name = "Ocean", Bg = Color.FromArgb(8, 19, 32), BgSide = Color.FromArgb(6, 15, 26),
+                Card = Color.FromArgb(13, 29, 47), CardBorder = Color.FromArgb(30, 56, 82),
+                TextHi = Color.FromArgb(234, 244, 252), Text = Color.FromArgb(184, 203, 222), TextDim = Color.FromArgb(116, 139, 163),
+                Go = Color.FromArgb(255, 148, 92), Eco = Color.FromArgb(74, 212, 150),
+                Cyan = Color.FromArgb(64, 222, 208), Amber = Color.FromArgb(255, 196, 112), Red = Color.FromArgb(255, 120, 120)
+            },
+            new ThemePreset
+            {
+                Name = "Ember", Bg = Color.FromArgb(25, 20, 17), BgSide = Color.FromArgb(19, 15, 12),
+                Card = Color.FromArgb(35, 28, 23), CardBorder = Color.FromArgb(64, 51, 42),
+                TextHi = Color.FromArgb(250, 242, 233), Text = Color.FromArgb(209, 197, 185), TextDim = Color.FromArgb(139, 127, 116),
+                Go = Color.FromArgb(255, 122, 64), Eco = Color.FromArgb(98, 206, 134),
+                Cyan = Color.FromArgb(255, 166, 74), Amber = Color.FromArgb(255, 190, 100), Red = Color.FromArgb(255, 110, 104)
+            },
+            new ThemePreset
+            {
+                Name = "Frost", Bg = Color.FromArgb(31, 37, 47), BgSide = Color.FromArgb(25, 30, 39),
+                Card = Color.FromArgb(41, 48, 60), CardBorder = Color.FromArgb(70, 80, 96),
+                TextHi = Color.FromArgb(245, 249, 255), Text = Color.FromArgb(205, 213, 225), TextDim = Color.FromArgb(134, 144, 160),
+                Go = Color.FromArgb(255, 128, 86), Eco = Color.FromArgb(98, 214, 146),
+                Cyan = Color.FromArgb(158, 216, 255), Amber = Color.FromArgb(255, 198, 114), Red = Color.FromArgb(255, 118, 118)
+            }
+        };
+
+        public static string PresetName = "Midnight";
+        public static Color Bg, BgSide, Card, CardBorder, TextHi, Text, TextDim, Go, Eco, Amber, Red;
+        public static Color Accent;        // the general accent (applies to Ui.Cyan)
+        public static Color NavColor;      // rail background
+        public static bool GradOn;
+        public static bool GradDiagonal;
+        public static Color GradFrom, GradTo;
+
+        static ThemeState()
+        {
+            ResetToDefault();
+        }
+
+        public static ThemePreset FindPreset(string name)
+        {
+            foreach (ThemePreset p in Presets)
+            {
+                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p;
+            }
+            return null;
+        }
+
+        // Copies a built-in palette into the state; the accent and the nav
+        // rail color reset with it (a preset is a full look). Gradient
+        // settings are the user's own and stay untouched.
+        public static void ApplyPreset(string name)
+        {
+            ThemePreset p = FindPreset(name);
+            if (p == null) return;
+            PresetName = p.Name;
+            Bg = p.Bg; BgSide = p.BgSide; Card = p.Card; CardBorder = p.CardBorder;
+            TextHi = p.TextHi; Text = p.Text; TextDim = p.TextDim;
+            Go = p.Go; Eco = p.Eco; Amber = p.Amber; Red = p.Red;
+            Accent = p.Cyan;
+            NavColor = p.BgSide;
+        }
+
+        // Full reset: the shipped Midnight look with no gradient.
+        public static void ResetToDefault()
+        {
+            ApplyPreset("Midnight");
+            GradOn = false;
+            GradDiagonal = false;
+            GradFrom = Bg;
+            GradTo = Bg;
+        }
+
+        // Pushes the state into the live palette. Called at startup (before
+        // any UI exists) and by MainForm.ApplyTheme on every live change.
+        public static void ApplyUi()
+        {
+            Ui.Bg = Bg;
+            Ui.BgSide = NavColor;      // the rail is one surface: BgSide follows NavBack
+            Ui.NavBack = NavColor;
+            Ui.Card = Card; Ui.CardBorder = CardBorder;
+            Ui.TextHi = TextHi; Ui.Text = Text; Ui.TextDim = TextDim;
+            Ui.Go = Go; Ui.Eco = Eco; Ui.Cyan = Accent; Ui.Amber = Amber; Ui.Red = Red;
+            Ui.HeaderGradA = GradFrom; Ui.HeaderGradB = GradTo;
+            Ui.GradEnabled = GradOn; Ui.GradDiagonal = GradDiagonal;
+        }
+
+        // ---- persistence (plain key=value lines, best-effort like the
+        // monitor interval file) ------------------------------------------
+
+        public static void Save()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(ThemeFile));
+                StringBuilder sb = new StringBuilder();
+                sb.Append("preset=").Append(PresetName).AppendLine();
+                AppendColor(sb, "bg", Bg);
+                AppendColor(sb, "bgside", BgSide);
+                AppendColor(sb, "card", Card);
+                AppendColor(sb, "cardborder", CardBorder);
+                AppendColor(sb, "texthi", TextHi);
+                AppendColor(sb, "text", Text);
+                AppendColor(sb, "textdim", TextDim);
+                AppendColor(sb, "go", Go);
+                AppendColor(sb, "eco", Eco);
+                AppendColor(sb, "cyan", Accent);
+                AppendColor(sb, "amber", Amber);
+                AppendColor(sb, "red", Red);
+                AppendColor(sb, "nav", NavColor);
+                AppendColor(sb, "gradfrom", GradFrom);
+                AppendColor(sb, "gradto", GradTo);
+                sb.Append("grad=").Append(GradOn ? 1 : 0).AppendLine();
+                sb.Append("graddiag=").Append(GradDiagonal ? 1 : 0).AppendLine();
+                File.WriteAllText(ThemeFile, sb.ToString());
+            }
+            catch { }   // persistence is best-effort; the live theme still applies
+        }
+
+        // Reads theme.txt into the state and applies it to Ui. A missing or
+        // unreadable file leaves the shipped defaults. A known preset name
+        // seeds the palette first; the stored palette keys then win (they are
+        // the full truth for a "Custom" theme).
+        public static void Load()
+        {
+            try
+            {
+                if (File.Exists(ThemeFile))
+                {
+                    Dictionary<string, string> kv = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (string raw in File.ReadAllLines(ThemeFile))
+                    {
+                        string line = raw == null ? "" : raw.Trim();
+                        if (line.Length == 0) continue;
+                        int eq = line.IndexOf('=');
+                        if (eq <= 0) continue;
+                        kv[line.Substring(0, eq).Trim()] = line.Substring(eq + 1).Trim();
+                    }
+
+                    string preset;
+                    if (!kv.TryGetValue("preset", out preset)) preset = "Midnight";
+                    PresetName = preset;                       // "Custom" (or unknown) survives the round trip
+                    if (FindPreset(preset) != null) ApplyPreset(preset);
+
+                    Color c;
+                    if (TryReadColor(kv, "bg", out c)) Bg = c;
+                    if (TryReadColor(kv, "bgside", out c)) BgSide = c;
+                    if (TryReadColor(kv, "card", out c)) Card = c;
+                    if (TryReadColor(kv, "cardborder", out c)) CardBorder = c;
+                    if (TryReadColor(kv, "texthi", out c)) TextHi = c;
+                    if (TryReadColor(kv, "text", out c)) Text = c;
+                    if (TryReadColor(kv, "textdim", out c)) TextDim = c;
+                    if (TryReadColor(kv, "go", out c)) Go = c;
+                    if (TryReadColor(kv, "eco", out c)) Eco = c;
+                    if (TryReadColor(kv, "cyan", out c)) Accent = c;
+                    if (TryReadColor(kv, "amber", out c)) Amber = c;
+                    if (TryReadColor(kv, "red", out c)) Red = c;
+                    if (TryReadColor(kv, "nav", out c)) NavColor = c;
+                    if (TryReadColor(kv, "gradfrom", out c)) GradFrom = c;
+                    if (TryReadColor(kv, "gradto", out c)) GradTo = c;
+                    int flag;
+                    if (TryReadFlag(kv, "grad", out flag)) GradOn = flag != 0;
+                    if (TryReadFlag(kv, "graddiag", out flag)) GradDiagonal = flag != 0;
+                }
+            }
+            catch { }   // corrupt file -> shipped defaults
+            ApplyUi();
+        }
+
+        private static void AppendColor(StringBuilder sb, string key, Color c)
+        {
+            sb.Append(key).Append('=').Append(c.R).Append(',').Append(c.G).Append(',').Append(c.B).AppendLine();
+        }
+
+        // "R,G,B" (the format AppendColor writes); false on anything else.
+        private static bool TryReadColor(Dictionary<string, string> kv, string key, out Color c)
+        {
+            c = Color.Black;
+            string v;
+            if (!kv.TryGetValue(key, out v)) return false;
+            string[] parts = v.Split(',');
+            if (parts.Length != 3) return false;
+            int r, g, b;
+            if (!int.TryParse(parts[0].Trim(), out r)) return false;
+            if (!int.TryParse(parts[1].Trim(), out g)) return false;
+            if (!int.TryParse(parts[2].Trim(), out b)) return false;
+            c = Color.FromArgb(Clamp255(r), Clamp255(g), Clamp255(b));
+            return true;
+        }
+
+        private static bool TryReadFlag(Dictionary<string, string> kv, string key, out int v)
+        {
+            v = 0;
+            string s;
+            return kv.TryGetValue(key, out s) && int.TryParse(s, out v);
+        }
+
+        private static int Clamp255(int v)
+        {
+            return Math.Max(0, Math.Min(255, v));
         }
     }
 }

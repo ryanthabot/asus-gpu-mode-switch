@@ -198,6 +198,9 @@ namespace GpuModeSwitch
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            // v1.3.0: apply the saved palette BEFORE any UI is constructed so
+            // a themed run never flashes the default look first.
+            ThemeState.Load();
             Application.Run(new MainForm(auto, confirm, startGo, startEco));
             Log.EndSession("main window closed");
         }

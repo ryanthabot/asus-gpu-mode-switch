@@ -2,7 +2,8 @@
 //  ---------------------------
 //  The windows of the unified GPU Mode Switch app. MainForm (v1.2.0
 //  redesign): ONE borderless window with a sidebar rail (Home / Optimize /
-//  Monitor / History), a gradient header with live status chips, big mode
+//  Monitor / History / Theme - the v1.3.0 palette page), a gradient header
+//  with live status chips, big mode
 //  cards on Home (GO TIME / ECO MODE - the active mode glows), the Go Time
 //  selection deck with animated ToggleSwitches in rounded cards (gate-
 //  locked cleanup rows show a lock banner with the reasons - the v1.1.1
@@ -914,7 +915,8 @@ namespace GpuModeSwitch
         Applying,   // switch running on the background thread (busy overlay)
         Result,     // done or failed (result overlay)
         Monitor,    // live system monitor page
-        History     // logs + session history page
+        History,    // logs + session history page
+        Theme       // palette + header gradient page (v1.3.0)
     }
 
     // ---------------------------------------------------------------------
@@ -954,6 +956,7 @@ namespace GpuModeSwitch
         private readonly NavButton _navOpt = new NavButton("\uE945", "Optimize");
         private readonly NavButton _navMon = new NavButton("\uE9D9", "Monitor");
         private readonly NavButton _navHist = new NavButton("\uE823", "History");
+        private readonly NavButton _navTheme = new NavButton("\uE790", "Theme");   // v1.3.0 palette page
         private readonly Label _verLbl = new Label();
         private readonly Label _title = new Label();   // plain Label: the GradientLabel never received WM_PAINT in the strip (see HANDBOOK v1.2.0 notes)
         private readonly Label _subtitle = new Label();
@@ -963,7 +966,7 @@ namespace GpuModeSwitch
         private readonly ShimmerBar _bar = new ShimmerBar();
         private readonly Label _status = new Label();
         private readonly Panel _content = new Panel();
-        private readonly Panel _headerStrip = new Panel();   // always-topmost header (title/chips/status/X)
+        private readonly HeaderStripPanel _headerStrip = new HeaderStripPanel();   // always-topmost header (title/chips/status/X); paints the optional gradient
 
         // ---- home section ----------------------------------------------------
         private readonly Panel _homeSection = new Panel();
@@ -1014,6 +1017,27 @@ namespace GpuModeSwitch
         private readonly Button _histBrowser = new Button();
         private readonly Button _histSessions = new Button();
         private readonly Label _histPath = new Label();
+
+        // ---- theme section (v1.3.0) -------------------------------------------
+        private readonly Panel _themeSection = new Panel();
+        private readonly Card _presetCard = new Card();
+        private readonly List<ThemeSwatch> _presetSwatches = new List<ThemeSwatch>();
+        private readonly Card _accentCard = new Card();
+        private readonly ThemeSwatch _accentSwatch = new ThemeSwatch();
+        private readonly Button _accentPick = new Button();
+        private readonly Card _gradCard = new Card();
+        private readonly ThemeSwatch _gradFromSwatch = new ThemeSwatch();
+        private readonly Button _gradFromPick = new Button();
+        private readonly ThemeSwatch _gradToSwatch = new ThemeSwatch();
+        private readonly Button _gradToPick = new Button();
+        private readonly Label _gradDirLabel = new Label();
+        private readonly ComboBox _gradDirBox = new ComboBox();
+        private readonly ToggleSwitch _gradToggle = new ToggleSwitch();
+        private readonly Card _navCard = new Card();
+        private readonly ThemeSwatch _navSwatch = new ThemeSwatch();
+        private readonly Button _navPick = new Button();
+        private readonly AccentButton _resetThemeBtn = new AccentButton();
+        private bool _syncingThemeUi;                 // guards SyncThemeUi against its own events
 
         // ---- busy / result overlay -------------------------------------------
         private readonly Panel _busy = new Panel();
@@ -1069,9 +1093,10 @@ namespace GpuModeSwitch
             BuildOptimize();
             BuildMonitor();
             BuildHistory();
+            BuildTheme();
             BuildBusyOverlay();
 
-            _content.Controls.AddRange(new Control[] { _homeSection, _optSection, _monSection, _histSection, _busy });
+            _content.Controls.AddRange(new Control[] { _homeSection, _optSection, _monSection, _histSection, _themeSection, _busy });
             _busy.BringToFront();                    // above the sections, below the header strip
             _content.Controls.Add(_headerStrip);
             // (v1.2.2) WinForms z-order gotcha: Controls.Add appends to the
@@ -1126,7 +1151,7 @@ namespace GpuModeSwitch
 
         private void BuildSide()
         {
-            _side.BackColor = Ui.BgSide;
+            _side.BackColor = Ui.NavBack;
             MakeDraggable(_side);
 
             Bitmap logo = LoadResourcePng("GpuModeSwitch.appicon.png");
@@ -1144,10 +1169,12 @@ namespace GpuModeSwitch
             _navOpt.Click += delegate { EnterOptimize(); };
             _navMon.Click += delegate { ShowMonitor(); };
             _navHist.Click += delegate { ShowHistorySection(); };
+            _navTheme.Click += delegate { ShowThemeSection(); };
             _side.Controls.Add(_navHome);
             _side.Controls.Add(_navOpt);
             _side.Controls.Add(_navMon);
             _side.Controls.Add(_navHist);
+            _side.Controls.Add(_navTheme);
 
             _verLbl.Text = "v" + Program.Version;
             _verLbl.ForeColor = Ui.TextDim;
@@ -1162,7 +1189,7 @@ namespace GpuModeSwitch
             _title.Text = "GPU MODE SWITCH";
             _title.Font = new Font("Segoe UI", 15f, FontStyle.Bold);
             _title.ForeColor = Ui.Cyan;
-            _title.BackColor = Ui.Bg;
+            _title.BackColor = HeaderChildBack();
             _title.AutoSize = false;
             _title.Size = new Size(310, 30);
             _title.TextAlign = ContentAlignment.MiddleLeft;
@@ -1170,7 +1197,7 @@ namespace GpuModeSwitch
 
             _subtitle.Text = "unified command deck  \u2022  both modes, one app";
             _subtitle.ForeColor = Ui.TextDim;
-            _subtitle.BackColor = Ui.Bg;
+            _subtitle.BackColor = HeaderChildBack();
             _subtitle.AutoSize = true;
             _subtitle.Font = new Font("Segoe UI", 9f);
 
@@ -1184,7 +1211,7 @@ namespace GpuModeSwitch
             _status.Text = "Starting...";
             _status.ForeColor = Ui.TextHi;
             _status.Font = new Font("Segoe UI", 11f, FontStyle.Bold);
-            _status.BackColor = Ui.Bg;
+            _status.BackColor = HeaderChildBack();
             _status.AutoSize = false;
             _status.Height = 26;
             MakeDraggable(_status);
@@ -1193,7 +1220,7 @@ namespace GpuModeSwitch
             _x.FlatStyle = FlatStyle.Flat;
             _x.FlatAppearance.BorderSize = 0;
             _x.ForeColor = Ui.TextDim;
-            _x.BackColor = Ui.Bg;
+            _x.BackColor = HeaderChildBack();
             _x.Font = new Font("Segoe UI", 10f);
             _x.Size = new Size(34, 28);
             _x.TabStop = false;
@@ -1210,7 +1237,7 @@ namespace GpuModeSwitch
             _min.FlatStyle = FlatStyle.Flat;
             _min.FlatAppearance.BorderSize = 0;
             _min.ForeColor = Ui.TextDim;
-            _min.BackColor = Ui.Bg;
+            _min.BackColor = HeaderChildBack();
             _min.Font = new Font("Segoe UI", 10f);
             _min.Size = new Size(34, 28);
             _min.TabStop = false;
@@ -1221,6 +1248,8 @@ namespace GpuModeSwitch
             // deliberately REVERSED (x/status/bar first, title last): in the
             // first v1.2.0 build only the last-added children of the strip
             // ever received paint, so the marquee controls are added last.
+            // The strip itself (v1.3.0 HeaderStripPanel) paints the solid
+            // Ui.Bg or the user's gradient in OnPaintBackground.
             _headerStrip.BackColor = Ui.Bg;
             // Add order (v1.2.2): the strip's children are laid out without
             // overlaps (title/subtitle left, chips right, bar/status bottom),
@@ -1247,11 +1276,20 @@ namespace GpuModeSwitch
         private void InitChip(Label chip, string text)
         {
             chip.Font = new Font("Segoe UI", 8.75f);
-            chip.BackColor = Ui.Bg;
+            chip.BackColor = HeaderChildBack();
             chip.AutoSize = false;
             chip.Size = new Size(170, 22);
             chip.TextAlign = ContentAlignment.MiddleLeft;
             SetChip(chip, text, Ui.TextDim);
+        }
+
+        // Background for the header's direct children: solid Ui.Bg, or
+        // transparent while the header gradient is on (a solid BackColor
+        // would patch over the gradient - managed transparency composites
+        // over the parent, which the strip paints itself).
+        private static Color HeaderChildBack()
+        {
+            return Ui.GradEnabled ? Color.Transparent : Ui.Bg;
         }
 
         private static void SetChip(Label chip, string text, Color color)
@@ -1550,6 +1588,287 @@ namespace GpuModeSwitch
             b.Cursor = Cursors.Hand;
         }
 
+        // ---- construction: theme (v1.3.0) -------------------------------------
+
+        // The Theme page: preset swatches, an accent picker, the header
+        // gradient group, the nav rail color and a reset - every change
+        // applies live (ApplyTheme) and persists (ThemeState.Save).
+        private void BuildTheme()
+        {
+            _themeSection.BackColor = Ui.Bg;
+            MakeDraggable(_themeSection);
+
+            _presetCard.CardTitle = "Presets - one click, applied live";
+            _presetCard.TitleAccent = Ui.Cyan;
+            for (int i = 0; i < ThemeState.Presets.Length; i++)
+            {
+                ThemePreset p = ThemeState.Presets[i];
+                ThemeSwatch sw = new ThemeSwatch();
+                sw.Text = p.Name;
+                sw.Preview = p.Bg;
+                sw.SwatchAccent = p.Cyan;
+                sw.Click += delegate { OnThemePresetPicked(p.Name); };
+                _presetSwatches.Add(sw);
+                _presetCard.Controls.Add(sw);
+            }
+
+            _accentCard.CardTitle = "Accent color - titles, active states, general highlights";
+            _accentCard.TitleAccent = Ui.Cyan;
+            _accentSwatch.Text = "accent";
+            _accentSwatch.Size = new Size(150, 34);
+            _accentPick.Text = "Pick...";
+            StyleSecondaryButton(_accentPick, 100, 28);
+            _accentPick.Click += delegate { OnPickAccentColor(); };
+            _accentCard.Controls.Add(_accentSwatch);
+            _accentCard.Controls.Add(_accentPick);
+
+            _gradCard.CardTitle = "Header gradient";
+            _gradCard.TitleAccent = Ui.Cyan;
+            _gradFromSwatch.Text = "from";
+            _gradFromSwatch.Size = new Size(120, 34);
+            _gradFromPick.Text = "Pick...";
+            StyleSecondaryButton(_gradFromPick, 100, 28);
+            _gradFromPick.Click += delegate { OnPickGradColor(true); };
+            _gradToSwatch.Text = "to";
+            _gradToSwatch.Size = new Size(120, 34);
+            _gradToPick.Text = "Pick...";
+            StyleSecondaryButton(_gradToPick, 100, 28);
+            _gradToPick.Click += delegate { OnPickGradColor(false); };
+            _gradDirLabel.Text = "Direction";
+            _gradDirLabel.ForeColor = Ui.TextDim;
+            _gradDirLabel.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            _gradDirLabel.BackColor = Color.Transparent;
+            _gradDirLabel.AutoSize = true;
+            _gradDirBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            _gradDirBox.Font = new Font("Segoe UI", 9.5f);
+            _gradDirBox.Width = 110;
+            _gradDirBox.FlatStyle = FlatStyle.Flat;
+            _gradDirBox.BackColor = Color.FromArgb(42, 42, 49);
+            _gradDirBox.ForeColor = Color.FromArgb(220, 220, 226);
+            _gradDirBox.Items.Add("Horizontal");
+            _gradDirBox.Items.Add("Diagonal");
+            _gradDirBox.SelectedIndex = ThemeState.GradDiagonal ? 1 : 0;
+            _gradDirBox.SelectedIndexChanged += delegate
+            {
+                if (_syncingThemeUi) return;
+                ThemeState.GradDiagonal = _gradDirBox.SelectedIndex == 1;
+                ThemeState.Save();
+                ApplyTheme();
+            };
+            _gradToggle.Text = "Gradient on";
+            _gradToggle.Accent = Ui.Cyan;
+            _gradToggle.Checked = ThemeState.GradOn;
+            _gradToggle.CheckedChanged += delegate
+            {
+                if (_syncingThemeUi) return;
+                ThemeState.GradOn = _gradToggle.Checked;
+                ThemeState.Save();
+                ApplyTheme();
+            };
+            _gradCard.Controls.Add(_gradFromSwatch);
+            _gradCard.Controls.Add(_gradFromPick);
+            _gradCard.Controls.Add(_gradToSwatch);
+            _gradCard.Controls.Add(_gradToPick);
+            _gradCard.Controls.Add(_gradDirLabel);
+            _gradCard.Controls.Add(_gradDirBox);
+            _gradCard.Controls.Add(_gradToggle);
+
+            _navCard.CardTitle = "Navigation bar color";
+            _navCard.TitleAccent = Ui.Cyan;
+            _navSwatch.Text = "rail";
+            _navSwatch.Size = new Size(150, 34);
+            _navPick.Text = "Pick...";
+            StyleSecondaryButton(_navPick, 100, 28);
+            _navPick.Click += delegate { OnPickNavColor(); };
+            _navCard.Controls.Add(_navSwatch);
+            _navCard.Controls.Add(_navPick);
+
+            _resetThemeBtn.Text = "RESET TO DEFAULT";
+            _resetThemeBtn.Size = new Size(190, 36);
+            _resetThemeBtn.From = Ui.Cyan;
+            _resetThemeBtn.To = Ui.Go;
+            _resetThemeBtn.Click += delegate { OnThemeReset(); };
+
+            _themeSection.Controls.Add(_presetCard);
+            _themeSection.Controls.Add(_accentCard);
+            _themeSection.Controls.Add(_gradCard);
+            _themeSection.Controls.Add(_navCard);
+            _themeSection.Controls.Add(_resetThemeBtn);
+
+            SyncThemeUi();
+        }
+
+        // ---- theme interaction ------------------------------------------------
+
+        // Opens the native color picker seeded with the current color;
+        // null when the dialog was canceled.
+        private Color? PickThemeDialog(Color current)
+        {
+            using (ColorDialog cd = new ColorDialog())
+            {
+                cd.Color = current;
+                cd.FullOpen = true;
+                if (cd.ShowDialog(this) != DialogResult.OK) return null;
+                return cd.Color;
+            }
+        }
+
+        private void OnThemePresetPicked(string name)
+        {
+            ThemeState.ApplyPreset(name);
+            ThemeState.Save();
+            ApplyTheme();
+            Log.Chan("THEME", "preset applied: " + name);
+        }
+
+        private void OnPickAccentColor()
+        {
+            Color? c = PickThemeDialog(ThemeState.Accent);
+            if (c == null) return;
+            ThemeState.Accent = c.Value;
+            ThemeState.PresetName = "Custom";
+            ThemeState.Save();
+            ApplyTheme();
+            Log.Chan("THEME", "accent color set (custom)");
+        }
+
+        private void OnPickGradColor(bool from)
+        {
+            Color? c = PickThemeDialog(from ? ThemeState.GradFrom : ThemeState.GradTo);
+            if (c == null) return;
+            if (from) ThemeState.GradFrom = c.Value; else ThemeState.GradTo = c.Value;
+            ThemeState.Save();
+            ApplyTheme();
+            Log.Chan("THEME", "gradient " + (from ? "from" : "to") + " color set");
+        }
+
+        private void OnPickNavColor()
+        {
+            Color? c = PickThemeDialog(ThemeState.NavColor);
+            if (c == null) return;
+            ThemeState.NavColor = c.Value;
+            ThemeState.PresetName = "Custom";
+            ThemeState.Save();
+            ApplyTheme();
+            Log.Chan("THEME", "navigation bar color set (custom)");
+        }
+
+        private void OnThemeReset()
+        {
+            ThemeState.ResetToDefault();
+            ThemeState.Save();
+            ApplyTheme();
+            Log.Chan("THEME", "theme reset to default");
+        }
+
+        // Re-points the Theme page controls at ThemeState (used at
+        // construction and after every ApplyTheme).
+        private void SyncThemeUi()
+        {
+            _syncingThemeUi = true;
+            for (int i = 0; i < _presetSwatches.Count && i < ThemeState.Presets.Length; i++)
+            {
+                _presetSwatches[i].Selected = string.Equals(
+                    ThemeState.Presets[i].Name, ThemeState.PresetName, StringComparison.OrdinalIgnoreCase);
+            }
+            _accentSwatch.Preview = ThemeState.Accent;
+            _accentSwatch.SwatchAccent = ThemeState.Accent;
+            _gradFromSwatch.Preview = ThemeState.GradFrom;
+            _gradFromSwatch.SwatchAccent = ThemeState.Accent;
+            _gradToSwatch.Preview = ThemeState.GradTo;
+            _gradToSwatch.SwatchAccent = ThemeState.Accent;
+            _navSwatch.Preview = ThemeState.NavColor;
+            _navSwatch.SwatchAccent = ThemeState.Accent;
+            _gradToggle.Checked = ThemeState.GradOn;
+            _gradDirBox.SelectedIndex = ThemeState.GradDiagonal ? 1 : 0;
+            _syncingThemeUi = false;
+        }
+
+        // Pushes ThemeState into Ui and re-colors every static surface; the
+        // owner-drawn controls (nav buttons, cards, switches, swatches, mode
+        // cards) read Ui inside OnPaint and pick the new palette up on the
+        // final Invalidate. Popups (log/session windows) are NOT touched
+        // here - they follow the palette constants in their own wave.
+        private void ApplyTheme()
+        {
+            ThemeState.ApplyUi();
+
+            // shell + sections
+            BackColor = Ui.Bg;
+            _content.BackColor = Ui.Bg;
+            _side.BackColor = Ui.NavBack;
+            foreach (Control c in new Control[] { _navHome, _navOpt, _navMon, _navHist, _navTheme })
+            {
+                c.BackColor = Ui.NavBack;
+            }
+            foreach (Control c in new Control[] { _homeSection, _optSection, _monSection, _histSection,
+                                                  _themeSection, _busy, _optScroll, _optBottom })
+            {
+                c.BackColor = Ui.Bg;
+            }
+            foreach (Card card in new Card[] { _sysCard, _trayCard, _perfCard, _cleanCard,
+                                               _presetCard, _accentCard, _gradCard, _navCard })
+            {
+                card.BackColor = Ui.Bg;      // corner pixels outside the rounded paint
+            }
+            _goCard.BackColor = Ui.Bg;
+            _ecoCard.BackColor = Ui.Bg;
+
+            // header: the strip paints the gradient itself; its children go
+            // transparent while it is on so no solid patch covers it
+            _headerStrip.BackColor = Ui.Bg;
+            _headerStrip.Invalidate();
+            Color headerBack = HeaderChildBack();
+            _title.ForeColor = Ui.Cyan;
+            _title.BackColor = headerBack;
+            _subtitle.ForeColor = Ui.TextDim;
+            _subtitle.BackColor = headerBack;
+            foreach (Label chip in new Label[] { _chipGpu, _chipEs, _chipBus }) chip.BackColor = headerBack;
+            _status.ForeColor = Ui.TextHi;
+            _status.BackColor = headerBack;
+            _min.ForeColor = Ui.TextDim; _min.BackColor = headerBack;
+            _x.ForeColor = Ui.TextDim; _x.BackColor = headerBack;
+            _verLbl.ForeColor = Ui.TextDim;
+
+            // accents captured at construction - refresh them here
+            _sysCard.TitleAccent = Ui.Go; _perfCard.TitleAccent = Ui.Go;
+            _trayCard.TitleAccent = Ui.Cyan; _cleanCard.TitleAccent = Ui.Cyan;
+            _presetCard.TitleAccent = Ui.Cyan; _accentCard.TitleAccent = Ui.Cyan;
+            _gradCard.TitleAccent = Ui.Cyan; _navCard.TitleAccent = Ui.Cyan;
+            foreach (ToggleSwitch sw in _optBoxes) sw.Accent = Ui.Go;
+            _freezeBox.Accent = Ui.Go; _planBox.Accent = Ui.Go; _wuPauseBox.Accent = Ui.Go;
+            foreach (ToggleSwitch sw in _trayBoxes) sw.Accent = Ui.Cyan;
+            _cleanWuBox.Accent = Ui.Cyan; _cleanDismBox.Accent = Ui.Cyan;
+            _cleanDeepBox.Accent = Ui.Cyan; _cleanGpuBox.Accent = Ui.Cyan;
+            foreach (ToggleSwitch sw in _appCacheBoxes) sw.Accent = Ui.Cyan;
+            _gradToggle.Accent = Ui.Cyan;
+            _goCard.Accent = Ui.Go;
+            _ecoCard.Accent = Ui.Eco;
+            _bar.Accent = Ui.Cyan;
+            _spin.Accent = Ui.Cyan;
+            _goBtn.From = Ui.Go;
+            _resHomeBtn.From = Ui.Eco; _resHomeBtn.To = Ui.Cyan;
+            _resetThemeBtn.From = Ui.Cyan; _resetThemeBtn.To = Ui.Go;
+
+            // history cards + the secondary buttons follow border/text colors
+            foreach (Button b in new Button[] { _histViewLog, _histBrowser, _histSessions })
+            {
+                b.BackColor = Ui.Card;
+                b.FlatAppearance.BorderColor = Ui.CardBorder;
+                b.ForeColor = Ui.TextHi;
+            }
+            foreach (Button b in new Button[] { _optCancel, _closeTray, _editFreezeList, _overlayBtn,
+                                                _resLogBtn, _resHistBtn, _resSessBtn, _resRestartBtn, _resTrayClose,
+                                                _accentPick, _gradFromPick, _gradToPick, _navPick })
+            {
+                b.FlatAppearance.BorderColor = Ui.CardBorder;
+                b.ForeColor = Ui.Text;
+            }
+
+            SyncThemeUi();
+            Invalidate(true);   // children included - owner-drawn controls repaint with the new Ui
+        }
+
         // ---- construction: busy / result overlay -------------------------------
 
         private void BuildBusyOverlay()
@@ -1651,6 +1970,7 @@ namespace GpuModeSwitch
             _navOpt.Location = new Point(0, navY + 58);
             _navMon.Location = new Point(0, navY + 116);
             _navHist.Location = new Point(0, navY + 174);
+            _navTheme.Location = new Point(0, navY + 232);
             _verLbl.Location = new Point(10, H - 40);
 
             _title.Location = new Point(18, 16);
@@ -1670,12 +1990,14 @@ namespace GpuModeSwitch
             _optSection.SetBounds(0, 0, cw, ch);
             _monSection.SetBounds(0, 0, cw, ch);
             _histSection.SetBounds(0, 0, cw, ch);
+            _themeSection.SetBounds(0, 0, cw, ch);
             _busy.SetBounds(0, 0, cw, ch);
 
             LayoutHome();
             LayoutOptimize();
             LayoutMonitor();
             LayoutHistory();
+            LayoutTheme();
             LayoutBusy();
         }
 
@@ -1798,6 +2120,46 @@ namespace GpuModeSwitch
             _histPath.Text = Log.CurrentLogPath.Length > 0 ? "this run: " + Log.CurrentLogPath : "";
         }
 
+        private void LayoutTheme()
+        {
+            int W = _themeSection.Width;
+            int inner = 600;
+            int x = Math.Max(16, (W - inner) / 2);
+            int y = 130;
+
+            _presetCard.SetBounds(x, y, inner, 116);
+            int sw = 96, gap = 12;
+            int total = _presetSwatches.Count * sw + (_presetSwatches.Count - 1) * gap;
+            int sx = (inner - total) / 2;
+            for (int i = 0; i < _presetSwatches.Count; i++)
+            {
+                _presetSwatches[i].SetBounds(sx + i * (sw + gap), 46, sw, 54);
+            }
+            y += 116 + 12;
+
+            _accentCard.SetBounds(x, y, inner, 98);
+            _accentSwatch.Location = new Point(24, 46);
+            _accentPick.Location = new Point(190, 49);
+            y += 98 + 12;
+
+            _gradCard.SetBounds(x, y, inner, 152);
+            _gradFromSwatch.Location = new Point(24, 46);
+            _gradFromPick.Location = new Point(154, 49);
+            _gradToSwatch.Location = new Point(300, 46);
+            _gradToPick.Location = new Point(430, 49);
+            _gradDirLabel.Location = new Point(24, 104);
+            _gradDirBox.Location = new Point(110, 100);
+            _gradToggle.SetBounds(300, 98, 260, 30);
+            y += 152 + 12;
+
+            _navCard.SetBounds(x, y, inner, 98);
+            _navSwatch.Location = new Point(24, 46);
+            _navPick.Location = new Point(190, 49);
+            y += 98 + 16;
+
+            _resetThemeBtn.Location = new Point(x + (inner - _resetThemeBtn.Width) / 2, y);
+        }
+
         private void LayoutBusy()
         {
             int W = _busy.Width, H = _busy.Height;
@@ -1841,14 +2203,17 @@ namespace GpuModeSwitch
             _optSection.Visible = section == UiPhase.Optimize;
             _monSection.Visible = section == UiPhase.Monitor;
             _histSection.Visible = section == UiPhase.History;
+            _themeSection.Visible = section == UiPhase.Theme;
             _navHome.Active = section == UiPhase.Home;
             _navOpt.Active = section == UiPhase.Optimize;
             _navMon.Active = section == UiPhase.Monitor;
             _navHist.Active = section == UiPhase.History;
+            _navTheme.Active = section == UiPhase.Theme;
             _bar.Visible = false;
             _bar.Active = false;
             if (section == UiPhase.Home) { _status.Text = "Choose a mode - the switch is one click away."; }
             if (section == UiPhase.History) LayoutHistory();
+            if (section == UiPhase.Theme) LayoutTheme();
             if (section == UiPhase.Optimize) { LayoutOptimize(); StartMeasureOnce(); }
         }
 
@@ -1861,10 +2226,12 @@ namespace GpuModeSwitch
             _optSection.Visible = false;
             _monSection.Visible = true;
             _histSection.Visible = false;
+            _themeSection.Visible = false;
             _navHome.Active = false;
             _navOpt.Active = false;
             _navMon.Active = true;
             _navHist.Active = false;
+            _navTheme.Active = false;
             EnsureMonitorEngine();
             _monitorPanel.AttachToEngine();
             _status.Text = "Live system monitor - the overlay stays over the game.";
@@ -1874,6 +2241,12 @@ namespace GpuModeSwitch
         {
             ShowSection(UiPhase.History);
             _status.Text = "Every run is logged - this run included.";
+        }
+
+        private void ShowThemeSection()
+        {
+            ShowSection(UiPhase.Theme);
+            _status.Text = "Theme - changes apply live and persist for the next session.";
         }
 
         // ---- probe / state ----------------------------------------------------
@@ -1956,6 +2329,7 @@ namespace GpuModeSwitch
             _navOpt.Enabled = on;
             _navMon.Enabled = on;
             _navHist.Enabled = on;
+            _navTheme.Enabled = on;
         }
 
         // Paints the live state everywhere it shows: header chips, the Home
@@ -1985,10 +2359,12 @@ namespace GpuModeSwitch
             _optSection.Visible = true;
             _monSection.Visible = false;
             _histSection.Visible = false;
+            _themeSection.Visible = false;
             _navHome.Active = false;
             _navOpt.Active = true;
             _navMon.Active = false;
             _navHist.Active = false;
+            _navTheme.Active = false;
             _status.Text = "Ready - choose what GO applies, then press GO.";
             EnsureMonitorEngine();
             _monitorPanel.AttachToEngine();

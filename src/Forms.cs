@@ -1010,6 +1010,8 @@ namespace GpuModeSwitch
         private readonly Label _monHint = new Label();
         private readonly Label _refreshLabel = new Label();          // v1.2.2 refresh-rate picker
         private readonly ComboBox _refreshBox = new ComboBox();
+        private readonly Label _diskLabel = new Label();             // v1.3.0 disk-view picker
+        private readonly ComboBox _diskViewBox = new ComboBox();
 
         // ---- history section -------------------------------------------------
         private readonly Panel _histSection = new Panel();
@@ -1542,9 +1544,47 @@ namespace GpuModeSwitch
                 Log.Chan("MONITOR", "refresh rate set to " + ms + " ms (saved)");
             };
 
+            // Disk-view picker (v1.3.0): which disk rows the monitor panel
+            // shows. Persisted beside the refresh interval (same style).
+            _diskLabel.Text = "Disks";
+            _diskLabel.ForeColor = Ui.TextDim;
+            _diskLabel.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            _diskLabel.BackColor = Color.Transparent;
+            _diskLabel.AutoSize = true;
+
+            _diskViewBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            _diskViewBox.Font = new Font("Segoe UI", 9.5f);
+            _diskViewBox.Width = 120;
+            _diskViewBox.FlatStyle = FlatStyle.Flat;
+            _diskViewBox.BackColor = Color.FromArgb(42, 42, 49);
+            _diskViewBox.ForeColor = Color.FromArgb(220, 220, 226);
+            _diskViewBox.Items.Add("C: only");
+            _diskViewBox.Items.Add("D: only");
+            _diskViewBox.Items.Add("Both (separate)");
+            _diskViewBox.Items.Add("Combined");
+            string savedView = MonitorEngine.SavedDiskView;
+            for (int i = 0; i < MonitorEngine.DiskViewChoices.Length; i++)
+            {
+                if (MonitorEngine.DiskViewChoices[i] == savedView) _diskViewBox.SelectedIndex = i;
+            }
+            if (_diskViewBox.SelectedIndex < 0) _diskViewBox.SelectedIndex = 2;   // Both (separate) default
+            _monitorPanel.SetDiskView(savedView);
+            _diskViewBox.SelectedIndexChanged += delegate
+            {
+                int idx = _diskViewBox.SelectedIndex;
+                if (idx < 0 || idx >= MonitorEngine.DiskViewChoices.Length) return;
+                string view = MonitorEngine.DiskViewChoices[idx];
+                MonitorEngine.SavedDiskView = view;
+                _monitorPanel.SetDiskView(view);
+                LayoutMonitor();          // the panel height changes with the row count
+                Log.Chan("MONITOR", "disk view set to " + view + " (saved)");
+            };
+
             _monSection.Controls.Add(_monitorPanel);
             _monSection.Controls.Add(_refreshLabel);
             _monSection.Controls.Add(_refreshBox);
+            _monSection.Controls.Add(_diskLabel);
+            _monSection.Controls.Add(_diskViewBox);
             _monSection.Controls.Add(_overlayBtn);
             _monSection.Controls.Add(_monHint);
         }
@@ -1865,6 +1905,9 @@ namespace GpuModeSwitch
                 b.ForeColor = Ui.Text;
             }
 
+            // monitor deck (v1.3.0): its rows/bars re-read the Ui.Mon* palette
+            _monitorPanel.ApplyTheme();
+
             SyncThemeUi();
             Invalidate(true);   // children included - owner-drawn controls repaint with the new Ui
         }
@@ -2102,10 +2145,15 @@ namespace GpuModeSwitch
         {
             int W = _monSection.Width;
             int mw = Math.Min(W - 48, 720);
-            _monitorPanel.SetBounds((W - mw) / 2, 120, mw, 240);
-            _refreshLabel.Location = new Point((W - 260) / 2, 372);
-            _refreshBox.Location = new Point((W - 260) / 2 + 170, 368);
-            _overlayBtn.Location = new Point((W - _overlayBtn.Width) / 2, 412);
+            _monitorPanel.SetBounds((W - mw) / 2, 110, mw, _monitorPanel.PreferredHeight);
+            int rowY = _monitorPanel.Bottom + 20;
+            int pairW = 560;
+            int pairX = Math.Max(16, (W - pairW) / 2);
+            _refreshLabel.Location = new Point(pairX, rowY + 5);
+            _refreshBox.Location = new Point(pairX + 150, rowY);
+            _diskLabel.Location = new Point(pairX + 270, rowY + 5);
+            _diskViewBox.Location = new Point(pairX + 390, rowY);
+            _overlayBtn.Location = new Point((W - _overlayBtn.Width) / 2, rowY + 44);
             _monHint.Location = new Point((W - 420) / 2, _overlayBtn.Bottom + 12);
         }
 

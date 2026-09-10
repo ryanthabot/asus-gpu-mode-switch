@@ -30,6 +30,19 @@
 //    CPU temp - WMI root\WMI MSAcpi_ThermalZoneTemperature (CurrentTemperature
 //           is tenths of Kelvin -> Celsius); only on machines exposing it.
 //
+//  v1.3.0 sensor expansion: the dGPU is its own metric (nvidia-smi line 0;
+//  the legacy GpuPercent/GpuTempC/HasGpu/HasGpuTemp stay as dGPU aliases so
+//  the overlay/session code is untouched), a best-effort iGPU utilization
+//  via the "GPU Engine" counter category (which phys id is the dGPU is
+//  learned by correlating the per-phys 3D utilization with the nvidia-smi
+//  number over a few samples, then cached; honest N/A until proven), the
+//  mean of all plausible ACPI zones next to the hottest-zone legacy field,
+//  and per-fixed-drive ("LogicalDisk","% Disk Time","C:") counters next to
+//  the combined PhysicalDisk _Total row. HasCpuHotspot / HasIgpuTemp are
+//  always false - Windows exposes no driverless API for either and neither
+//  is ever faked. The monitor's disk-view choice persists like the interval
+//  (monitor_diskview.txt).
+//
 //  Log contract (channel MONITOR): "monitor: started (N ms)" / "monitor:
 //  stopped" on the lifecycle, one line when nvidia-smi is found, and the two
 //  one-time-per-session unavailability lines
@@ -65,13 +78,33 @@ namespace GpuModeSwitch
         public ulong RamUsedBytes;
         public ulong RamTotalBytes;
         public float DiskActivePercent;   // 0-100 (can read >100 on some disks; clamped)
-        public float GpuPercent;          // valid when HasGpu
-        public float GpuTempC;            // valid when HasGpuTemp
-        public float CpuTempC;            // valid when HasCpuTemp
-        public bool HasGpu;
-        public bool HasGpuTemp;
+        public float GpuPercent;          // LEGACY alias of DgpuPercent (valid when HasGpu)
+        public float GpuTempC;            // LEGACY alias of DgpuTempC (valid when HasGpuTemp)
+        public float CpuTempC;            // hottest plausible ACPI zone (valid when HasCpuTemp)
+        public bool HasGpu;               // LEGACY alias of HasDgpu
+        public bool HasGpuTemp;           // LEGACY alias of HasDgpuTemp
         public bool HasCpuTemp;
         public DateTime Timestamp;
+
+        // v1.3.0 sensor expansion. The dGPU is the discrete NVIDIA adapter
+        // (nvidia-smi GPU 0 on this app's target machines); the iGPU is every
+        // other "GPU Engine" phys once the phys mapping is proven.
+        public float DgpuPercent;         // valid when HasDgpu
+        public float DgpuTempC;           // valid when HasDgpuTemp
+        public bool HasDgpu;
+        public bool HasDgpuTemp;
+        public float IgpuPercent;         // valid when HasIgpu
+        public bool HasIgpu;              // false until the phys mapping is proven
+        public float CpuTempAvgC;         // mean of all plausible zones; valid when HasCpuTempAvg
+        public bool HasCpuTempAvg;        // tracks HasCpuTemp (same sensor, averaged)
+        public bool HasCpuHotspot;        // ALWAYS false - no driverless Windows API; never faked
+        public bool HasIgpuTemp;          // ALWAYS false - no driverless Windows API; never faked
+
+        // Per-fixed-drive utilization: DiskNames[i] is a letter ("C:", "D:",
+        // ... - every DriveType=3 drive found), DiskPct[i] its % Disk Time
+        // (clamped). DiskActivePercent stays the PhysicalDisk _Total value.
+        public string[] DiskNames;
+        public float[] DiskPct;
 
         // "4.2 / 16.0 GB" - RAM used / total. Invariant format so the panel
         // never depends on the user's decimal separator.
@@ -136,6 +169,46 @@ namespace GpuModeSwitch
             }
         }
 
+        // Disk-view choices for the Monitor page dropdown (v1.3.0): which
+        // per-disk rows MonitorPanel shows. "combined" = the single
+        // "Disks (combined)" row; "both" = one row per fixed drive plus the
+        // combined row. Persisted like the interval.
+        public static readonly string[] DiskViewChoices = { "C", "D", "both", "combined" };
+        public const string DefaultDiskView = "both";
+        private static readonly string DiskViewFile = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "GpuModeSwitch", "monitor_diskview.txt");
+
+        // Saved disk view (validated against the choice set; default "both").
+        public static string SavedDiskView
+        {
+            get
+            {
+                try
+                {
+                    if (System.IO.File.Exists(DiskViewFile))
+                    {
+                        string v = System.IO.File.ReadAllText(DiskViewFile).Trim();
+                        foreach (string c in DiskViewChoices)
+                        {
+                            if (c == v) return v;
+                        }
+                    }
+                }
+                catch { }
+                return DefaultDiskView;
+            }
+            set
+            {
+                try
+                {
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(DiskViewFile));
+                    System.IO.File.WriteAllText(DiskViewFile, value);
+                }
+                catch { }   // best-effort, like the interval
+            }
+        }
+
         // (v1.2.2) Counter creation and every sample can block for a long
         // time on a degraded WMI/PDH stack (observed: ~12 s just to prime on
         // a healthy machine, minutes-to-forever on one with a sick WMI repo,
@@ -154,17 +227,38 @@ namespace GpuModeSwitch
         private static PerformanceCounter _diskCounter;
         private static ManagementObjectSearcher _cpuTempSearcher;
 
+        // (v1.3.0) per-fixed-drive counters: one ("LogicalDisk","% Disk
+        // Time","C:") per DriveType=3 drive found, created once per Ensure
+        // cycle on the pool thread. _diskNamesSnapshot lets UI threads read
+        // the discovered letters without taking _gate (a sample can hold it
+        // for the whole nvidia-smi timeout).
+        private static readonly List<string> _diskNames = new List<string>();
+        private static Dictionary<string, PerformanceCounter> _diskCounters;
+        private static volatile string[] _diskNamesSnapshot = new string[0];
+
+        // (v1.3.0) "GPU Engine" utilization counters for the iGPU metric.
+        // Instance names change as processes start and stop, so the list is
+        // rebuilt every ~5 samples (category enumeration is expensive - never
+        // per sample).
+        private static Dictionary<string, PerformanceCounter> _gpuEngCounters;
+        private static int _gpuEngRefreshIn = 1;      // rebuild right after the first sample
+        private const int GpuEngRefreshEvery = 5;
+
         // Last-known values: a failed metric keeps these instead of breaking the tick.
         private static float _lastCpu;
         private static float _lastDisk;
         private static float _lastGpu;
         private static float _lastGpuTemp;
         private static float _lastCpuTemp;
+        private static float _lastCpuTempAvg;
+        private static float _lastIgpu;
         private static ulong _lastRamUsed;
         private static ulong _lastRamTotal;
+        private static readonly Dictionary<string, float> _lastDiskByLetter = new Dictionary<string, float>();
         private static bool _hasGpu;
         private static bool _hasGpuTemp;
         private static bool _hasCpuTemp;
+        private static bool _hasIgpu;
 
         // Session-level state for the optional metrics.
         private static bool _smiResolved;             // nvidia-smi lookup done once per session
@@ -174,6 +268,20 @@ namespace GpuModeSwitch
         private static bool _cpuTempDead;             // sensor never answered - stop querying
         private static bool _cpuTempEverWorked;
         private static bool _cpuTempUnavailableLogged;
+
+        // iGPU correlation state: which "phys_N" segment of the GPU Engine
+        // instances is the NVIDIA dGPU. Learned once (nvidia-smi % vs each
+        // phys 3D-utilization sum over a rolling window), cached for the
+        // session; every other phys is the iGPU.
+        private static bool _gpuEngDead;              // category never answered - stop querying
+        private static bool _gpuEngEverWorked;
+        private static bool _gpuEngUnavailableLogged;
+        private static int _dgpuPhys = -1;            // -1 = not proven yet
+        private static int _physSeenMask;             // bit N set = phys_N seen at least once
+        private static readonly List<float> _smiHist = new List<float>();
+        private static readonly List<Dictionary<int, float>> _physHist = new List<Dictionary<int, float>>();
+        private const int PhysHistMax = 6;
+        private const float CorrelateTolerancePct = 15f;
 
         private static MonitorSample _lastSample;
 
@@ -193,6 +301,15 @@ namespace GpuModeSwitch
         public static MonitorSample LastSample
         {
             get { return _lastSample; }
+        }
+
+        // Fixed logical disks discovered for this machine (letters like
+        // "C:"), for UIs that lay rows out before the first sample. Lock-free:
+        // a UI thread must never wait on _gate (a sample holds it for the
+        // nvidia-smi timeout).
+        public static string[] FixedDisks
+        {
+            get { return _diskNamesSnapshot; }
         }
 
         // Starts sampling every intervalMs (clamped to >= 250). If already
@@ -271,7 +388,8 @@ namespace GpuModeSwitch
         // counters already exist or a priming run is in flight.
         private static void PrimeCountersAsync()
         {
-            if (_cpuCounter != null && _diskCounter != null) return;
+            if (_cpuCounter != null && _diskCounter != null && _diskCounters != null
+                && (_gpuEngCounters != null || _gpuEngDead)) return;
             if (_priming) return;
             _priming = true;
             System.Threading.ThreadPool.QueueUserWorkItem(delegate(object state)
@@ -294,6 +412,7 @@ namespace GpuModeSwitch
                 SampleRam(s);
                 SampleDisk(s);
                 SampleGpu(s);
+                SampleIgpu(s);                        // after SampleGpu: correlation uses this tick's smi number
                 SampleCpuTemp(s);
 
                 s.CpuPercent = ClampPct(_lastCpu);
@@ -306,6 +425,30 @@ namespace GpuModeSwitch
                 s.HasGpuTemp = _hasGpu && _hasGpuTemp;
                 s.CpuTempC = _lastCpuTemp;
                 s.HasCpuTemp = _hasCpuTemp;
+
+                // v1.3.0: the dGPU is its own metric; the legacy Gpu* fields
+                // above stay as aliases (overlay / session code unchanged).
+                s.DgpuPercent = ClampPct(_lastGpu);
+                s.HasDgpu = _hasGpu;
+                s.DgpuTempC = _lastGpuTemp;
+                s.HasDgpuTemp = _hasGpu && _hasGpuTemp;
+                s.IgpuPercent = ClampPct(_lastIgpu);
+                s.HasIgpu = _hasIgpu;
+                s.CpuTempAvgC = _lastCpuTempAvg;
+                s.HasCpuTempAvg = _hasCpuTemp;
+                s.HasCpuHotspot = false;              // honest: no driverless hotspot API
+                s.HasIgpuTemp = false;                // honest: no driverless iGPU temp API
+
+                string[] names = _diskNames.ToArray();
+                float[] pct = new float[names.Length];
+                for (int i = 0; i < names.Length; i++)
+                {
+                    float v;
+                    pct[i] = _lastDiskByLetter.TryGetValue(names[i], out v) ? ClampPct(v) : 0f;
+                }
+                s.DiskNames = names;
+                s.DiskPct = pct;
+                _diskNamesSnapshot = names;
 
                 _lastSample = s;
             }
@@ -352,6 +495,17 @@ namespace GpuModeSwitch
                         _diskCounter = null;
                     }
                 }
+
+                if (_diskCounters == null)
+                {
+                    BuildLogicalDiskCounters();
+                }
+
+                if (_gpuEngCounters == null && !_gpuEngDead)
+                {
+                    RefreshGpuEngineCounters();
+                    _gpuEngRefreshIn = GpuEngRefreshEvery;
+                }
             }
         }
 
@@ -373,6 +527,27 @@ namespace GpuModeSwitch
                     try { _diskCounter.Dispose(); } catch { }
                     _diskCounter = null;
                 }
+                if (_diskCounters != null)
+                {
+                    foreach (KeyValuePair<string, PerformanceCounter> kv in _diskCounters)
+                    {
+                        try { kv.Value.Dispose(); } catch { }
+                    }
+                    _diskCounters = null;
+                }
+                if (_gpuEngCounters != null)
+                {
+                    foreach (KeyValuePair<string, PerformanceCounter> kv in _gpuEngCounters)
+                    {
+                        try { kv.Value.Dispose(); } catch { }
+                    }
+                    _gpuEngCounters = null;
+                }
+                // The phys mapping is machine-stable and stays cached; the
+                // time-adjacent correlation history does not survive a stop.
+                _smiHist.Clear();
+                _physHist.Clear();
+                _gpuEngRefreshIn = 1;
                 if (_cpuTempSearcher != null)
                 {
                     try { _cpuTempSearcher.Dispose(); } catch { }
@@ -419,6 +594,77 @@ namespace GpuModeSwitch
             {
                 // keep last-known
             }
+
+            if (_diskCounters != null)
+            {
+                foreach (KeyValuePair<string, PerformanceCounter> kv in _diskCounters)
+                {
+                    try
+                    {
+                        float v = kv.Value.NextValue();
+                        if (v < 0f) v = 0f;
+                        _lastDiskByLetter[kv.Key] = v;    // clamped on publish
+                    }
+                    catch
+                    {
+                        // keep last-known for this letter
+                    }
+                }
+            }
+        }
+
+        // One ("LogicalDisk","% Disk Time","X:") counter per fixed drive
+        // (DriveType=3) - every fixed drive on the machine, not just C:/D:.
+        // A drive whose counter fails to create is simply not reported.
+        // Caller must hold _gate (pool thread only - counter creation).
+        private static void BuildLogicalDiskCounters()
+        {
+            Dictionary<string, PerformanceCounter> built = new Dictionary<string, PerformanceCounter>();
+            List<string> names = new List<string>();
+            try
+            {
+                DriveInfo[] drives = DriveInfo.GetDrives();
+                for (int i = 0; i < drives.Length; i++)
+                {
+                    DriveInfo d = drives[i];
+                    if (d.DriveType != DriveType.Fixed)
+                    {
+                        continue;
+                    }
+                    string letter;
+                    try
+                    {
+                        letter = d.Name.TrimEnd('\\');    // "C:\" -> "C:"
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+                    if (letter.Length == 0)
+                    {
+                        continue;
+                    }
+                    try
+                    {
+                        PerformanceCounter c = new PerformanceCounter("LogicalDisk", "% Disk Time", letter);
+                        c.NextValue();                    // prime
+                        built[letter] = c;
+                        names.Add(letter);
+                    }
+                    catch
+                    {
+                        // no counter for this letter - skip it
+                    }
+                }
+            }
+            catch
+            {
+                // DriveInfo enumeration failed - report no per-letter disks
+            }
+            _diskCounters = built;
+            _diskNames.Clear();
+            _diskNames.AddRange(names);
+            _diskNamesSnapshot = names.ToArray();
         }
 
         // kernel32 GlobalMemoryStatusEx (MEMORYSTATUSEX) - no PerformanceCounter.
@@ -483,16 +729,20 @@ namespace GpuModeSwitch
 
             try
             {
-                float util;
-                float temp;
-                bool hasTemp;
-                if (RunNvidiaSmi(out util, out temp, out hasTemp))
+                float[] utils;
+                float[] temps;
+                bool[] hasTemps;
+                if (RunNvidiaSmi(out utils, out temps, out hasTemps) && utils.Length > 0)
                 {
-                    _lastGpu = util;
+                    // dGPU = nvidia-smi GPU 0 (line 0) - the discrete adapter
+                    // on this app's single-NVIDIA-GPU target machines. The
+                    // later lines exist for multi-NVIDIA-GPU boxes; only GPU 0
+                    // is reported today, same as v1.2.
+                    _lastGpu = utils[0];
                     _hasGpu = true;
-                    if (hasTemp)
+                    if (hasTemps[0])
                     {
-                        _lastGpuTemp = temp;
+                        _lastGpuTemp = temps[0];
                         _hasGpuTemp = true;
                     }
                     else
@@ -586,13 +836,14 @@ namespace GpuModeSwitch
 
         // Runs `nvidia-smi --query-gpu=utilization.gpu,temperature.gpu
         // --format=csv,noheader,nounits` (hidden, short timeout) and parses
-        // the first line "util, temp". Output is tiny, so reading stdout to
-        // the end before the timeout wait cannot deadlock.
-        private static bool RunNvidiaSmi(out float util, out float temp, out bool hasTemp)
+        // EVERY output line (one per NVIDIA GPU; the dGPU is line 0). Output
+        // is tiny, so reading stdout to the end before the timeout wait
+        // cannot deadlock.
+        private static bool RunNvidiaSmi(out float[] utils, out float[] temps, out bool[] hasTemps)
         {
-            util = 0f;
-            temp = 0f;
-            hasTemp = false;
+            utils = new float[0];
+            temps = new float[0];
+            hasTemps = new bool[0];
 
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = _smiPath;
@@ -618,22 +869,30 @@ namespace GpuModeSwitch
                 {
                     return false;
                 }
-                return ParseGpuOutput(output, out util, out temp, out hasTemp);
+                return ParseGpuOutput(output, out utils, out temps, out hasTemps);
             }
         }
 
-        // First non-empty line: "34, 45" (nounits). A "N/A" temp is allowed -
-        // utilization only. Multiple GPUs: the first line wins.
-        private static bool ParseGpuOutput(string output, out float util, out float temp, out bool hasTemp)
+        // Every non-empty line: "util, temp" (nounits), one line per NVIDIA
+        // GPU in ascending index order; index 0 is the dGPU. A "N/A" temp on
+        // a line is allowed - utilization only for that GPU. Any malformed
+        // line fails the whole parse (the strictness of the v1.2 first-line
+        // parser, applied to every line). Public for the offline parser tests
+        // (probe harness).
+        public static bool ParseGpuOutput(string output, out float[] utils, out float[] temps, out bool[] hasTemps)
         {
-            util = 0f;
-            temp = 0f;
-            hasTemp = false;
+            utils = new float[0];
+            temps = new float[0];
+            hasTemps = new bool[0];
 
             if (string.IsNullOrEmpty(output))
             {
                 return false;
             }
+
+            List<float> u = new List<float>();
+            List<float> t = new List<float>();
+            List<bool> h = new List<bool>();
 
             string[] lines = output.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
             for (int i = 0; i < lines.Length; i++)
@@ -650,32 +909,322 @@ namespace GpuModeSwitch
                     return false;
                 }
 
-                float u;
-                if (!float.TryParse(parts[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out u))
+                float util;
+                if (!float.TryParse(parts[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out util))
                 {
                     return false;
                 }
 
                 string tempText = parts[1].Trim();
-                float t;
+                float temp;
                 if (tempText.Equals("n/a", StringComparison.OrdinalIgnoreCase) ||
-                    !float.TryParse(tempText, NumberStyles.Float, CultureInfo.InvariantCulture, out t))
+                    !float.TryParse(tempText, NumberStyles.Float, CultureInfo.InvariantCulture, out temp))
                 {
-                    util = u;
-                    hasTemp = false;
-                    return true;
+                    u.Add(util);
+                    t.Add(0f);
+                    h.Add(false);
+                }
+                else
+                {
+                    u.Add(util);
+                    t.Add(temp);
+                    h.Add(true);
+                }
+            }
+
+            if (u.Count == 0)
+            {
+                return false;
+            }
+            utils = u.ToArray();
+            temps = t.ToArray();
+            hasTemps = h.ToArray();
+            return true;
+        }
+
+        // ---- iGPU (best effort, v1.3.0) -------------------------------------
+        //
+        // Windows exposes per-engine utilization in the "GPU Engine"
+        // performance category; instance names look like
+        //   pid_1234_luid_0x00000000_0x0000C3B7_phys_0_eng_3_engtype_3D
+        // The numeric "phys_N" segment identifies the physical adapter, but
+        // WHICH phys id is the NVIDIA dGPU is documented nowhere. So it is
+        // learned once: while nvidia-smi is alive, the per-phys 3D
+        // utilization sum is compared against the nvidia-smi dGPU number over
+        // a rolling window of samples; the phys that tracks it (within
+        // tolerance, and clearly better than the runner-up, and only once the
+        // dGPU actually did something - at 0% every adapter "matches") is the
+        // dGPU. The mapping is cached for the session and every OTHER phys is
+        // the iGPU. Until the mapping is proven - or forever on
+        // single-adapter machines - the iGPU honestly reports N/A. Any
+        // category failure marks the metric dead for the session (the
+        // _gpuDead pattern).
+
+        private static void SampleIgpu(MonitorSample s)
+        {
+            if (_gpuEngDead || _gpuEngCounters == null)
+            {
+                return;
+            }
+
+            _gpuEngRefreshIn--;
+            if (_gpuEngRefreshIn <= 0)
+            {
+                RefreshGpuEngineCounters();               // every ~5 samples; enumeration is expensive
+                _gpuEngRefreshIn = GpuEngRefreshEvery;
+            }
+            if (_gpuEngDead)
+            {
+                return;
+            }
+
+            try
+            {
+                Dictionary<int, float> physNow = new Dictionary<int, float>();
+                foreach (KeyValuePair<string, PerformanceCounter> kv in _gpuEngCounters)
+                {
+                    try
+                    {
+                        float v = kv.Value.NextValue();
+                        if (v < 0f) v = 0f;
+                        int phys = ParsePhysId(kv.Key);
+                        if (phys < 0)
+                        {
+                            continue;
+                        }
+                        float sum;
+                        physNow[phys] = physNow.TryGetValue(phys, out sum) ? sum + v : v;
+                        if (phys < 31)
+                        {
+                            _physSeenMask |= 1 << phys;
+                        }
+                    }
+                    catch
+                    {
+                        // dead instance - dropped at the next refresh
+                    }
                 }
 
-                util = u;
-                temp = t;
-                hasTemp = true;
-                return true;
+                if (_hasGpu)
+                {
+                    // correlation input: this tick's nvidia-smi dGPU number
+                    _smiHist.Add(_lastGpu);
+                    _physHist.Add(physNow);
+                    while (_smiHist.Count > PhysHistMax)
+                    {
+                        _smiHist.RemoveAt(0);
+                        _physHist.RemoveAt(0);
+                    }
+                    if (_dgpuPhys < 0 && _smiHist.Count >= 3)
+                    {
+                        TryCorrelateDgpuPhys();
+                    }
+                }
+
+                if (_dgpuPhys >= 0)
+                {
+                    float igpu = 0f;
+                    bool seen = false;
+                    foreach (KeyValuePair<int, float> kv in physNow)
+                    {
+                        if (kv.Key == _dgpuPhys)
+                        {
+                            continue;
+                        }
+                        igpu += kv.Value;
+                        seen = true;
+                    }
+                    if (seen)
+                    {
+                        _lastIgpu = igpu;                // multi-engine sums can pass 100; clamped on publish
+                        _hasIgpu = true;
+                    }
+                    // else: no non-dGPU 3D engine right now - keep last-known
+                }
+                _gpuEngEverWorked = true;
             }
-            return false;
+            catch
+            {
+                if (!_gpuEngEverWorked)
+                {
+                    _gpuEngDead = true;
+                    _hasIgpu = false;
+                    LogGpuEngUnavailableOnce("monitor: igpu metrics unavailable (GPU Engine category)");
+                }
+                // else: a working stack hiccupped - keep the last-known value
+            }
+        }
+
+        private static void LogGpuEngUnavailableOnce(string message)
+        {
+            if (_gpuEngUnavailableLogged)
+            {
+                return;
+            }
+            _gpuEngUnavailableLogged = true;
+            Log.Chan("MONITOR", message);
+        }
+
+        // Rebuilds the GPU Engine counter set from the live instance list
+        // (instances appear/disappear as processes start and stop). Caller
+        // must hold _gate (pool thread only - counter creation).
+        private static void RefreshGpuEngineCounters()
+        {
+            Dictionary<string, PerformanceCounter> fresh = new Dictionary<string, PerformanceCounter>();
+            try
+            {
+                PerformanceCounterCategory cat = new PerformanceCounterCategory("GPU Engine");
+                string[] instances = cat.GetInstanceNames();
+                for (int i = 0; i < instances.Length; i++)
+                {
+                    string inst = instances[i];
+                    if (inst.IndexOf("engtype_3D", StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        continue;
+                    }
+                    if (ParsePhysId(inst) < 0)
+                    {
+                        continue;
+                    }
+                    try
+                    {
+                        PerformanceCounter c = new PerformanceCounter("GPU Engine", "Utilization Percentage", inst, true);
+                        c.NextValue();                    // prime
+                        fresh[inst] = c;
+                    }
+                    catch
+                    {
+                        // instance vanished mid-enumeration - skip it
+                    }
+                }
+                _gpuEngEverWorked = true;
+            }
+            catch
+            {
+                if (!_gpuEngEverWorked)
+                {
+                    _gpuEngDead = true;                  // no GPU Engine category at all
+                    _hasIgpu = false;
+                    LogGpuEngUnavailableOnce("monitor: igpu metrics unavailable (GPU Engine category)");
+                }
+                // else: an enumeration hiccup - keep the previous counters
+                return;
+            }
+
+            if (_gpuEngCounters != null)
+            {
+                foreach (KeyValuePair<string, PerformanceCounter> kv in _gpuEngCounters)
+                {
+                    if (!fresh.ContainsKey(kv.Key))
+                    {
+                        try { kv.Value.Dispose(); } catch { }
+                    }
+                }
+            }
+            _gpuEngCounters = fresh;
+        }
+
+        // "pid_..._phys_3_eng_..." -> 3; -1 when there is no phys segment.
+        private static int ParsePhysId(string instance)
+        {
+            int i = instance.IndexOf("phys_", StringComparison.Ordinal);
+            if (i < 0)
+            {
+                return -1;
+            }
+            i += 5;
+            int n = 0;
+            bool any = false;
+            while (i < instance.Length && instance[i] >= '0' && instance[i] <= '9')
+            {
+                n = n * 10 + (instance[i] - '0');
+                i++;
+                any = true;
+                if (n > 999)
+                {
+                    return -1;                           // runaway digits - not a phys id
+                }
+            }
+            return any ? n : -1;
+        }
+
+        // Picks the phys whose 3D utilization sum tracks the nvidia-smi dGPU
+        // number best across the rolling history. Guarded three ways: the dGPU
+        // must have been actually busy at least once (>= 10%), the best mean
+        // abs diff must be within tolerance, and it must beat the runner-up
+        // by a margin - otherwise the data is not distinguishing anything
+        // yet and the decision waits. Cached for the session once proven.
+        private static void TryCorrelateDgpuPhys()
+        {
+            float maxSmi = 0f;
+            for (int i = 0; i < _smiHist.Count; i++)
+            {
+                if (_smiHist[i] > maxSmi) maxSmi = _smiHist[i];
+            }
+            if (maxSmi < 10f)
+            {
+                return;                                   // idle dGPU cannot be told from an idle iGPU
+            }
+
+            int bestPhys = -1, nextPhys = -1;
+            float bestDiff = float.MaxValue, nextDiff = float.MaxValue;
+            for (int bit = 0; bit < 31; bit++)
+            {
+                if ((_physSeenMask & (1 << bit)) == 0)
+                {
+                    continue;
+                }
+                int samples = 0;
+                float diff = 0f;
+                for (int i = 0; i < _smiHist.Count; i++)
+                {
+                    float v;
+                    if (!_physHist[i].TryGetValue(bit, out v))
+                    {
+                        continue;
+                    }
+                    diff += Math.Abs(Math.Min(v, 100f) - Math.Min(_smiHist[i], 100f));
+                    samples++;
+                }
+                if (samples < 2)
+                {
+                    continue;
+                }
+                diff /= samples;
+                if (diff < bestDiff)
+                {
+                    nextDiff = bestDiff;
+                    nextPhys = bestPhys;
+                    bestDiff = diff;
+                    bestPhys = bit;
+                }
+                else if (diff < nextDiff)
+                {
+                    nextDiff = diff;
+                    nextPhys = bit;
+                }
+            }
+
+            if (bestPhys < 0 || bestDiff > CorrelateTolerancePct)
+            {
+                return;                                   // not provable (yet)
+            }
+            if (nextPhys >= 0 && bestDiff + 3f > nextDiff)
+            {
+                return;                                   // ambiguous - wait for distinguishable data
+            }
+
+            _dgpuPhys = bestPhys;                         // cached for the session
+            _smiHist.Clear();
+            _physHist.Clear();
+            Log.Chan("MONITOR", "monitor: gpu engine phys mapped (dgpu = phys_" + bestPhys.ToString(CultureInfo.InvariantCulture) + ")");
         }
 
         // CPU temperature via WMI root\WMI MSAcpi_ThermalZoneTemperature
-        // (CurrentTemperature is tenths of Kelvin). Only queried while the
+        // (CurrentTemperature is tenths of Kelvin). v1.3.0 reads every zone:
+        // the hottest feeds the legacy CpuTempC field and the mean of all
+        // plausible zones feeds CpuTempAvgC (the panel shows the average -
+        // one honest "CPU temp" concept per field). Only queried while the
         // sensor answers; the first failure logs the one-time line and the
         // metric reports N/A for the rest of the session.
         private static void SampleCpuTemp(MonitorSample s)
@@ -687,8 +1236,9 @@ namespace GpuModeSwitch
 
             try
             {
-                float c = ReadCpuTempWmi();
-                _lastCpuTemp = c;
+                List<float> zones = ReadThermalZonesWmi();
+                _lastCpuTemp = HottestZone(zones);
+                _lastCpuTempAvg = AverageZones(zones);
                 _hasCpuTemp = true;
                 _cpuTempEverWorked = true;
             }
@@ -708,10 +1258,11 @@ namespace GpuModeSwitch
             }
         }
 
-        // Returns the hottest plausible zone temperature in Celsius. Zones
-        // outside -50..150 C are treated as garbage (some boards report raw
-        // ambient placeholders). Throws when the class is unavailable.
-        private static float ReadCpuTempWmi()
+        // All plausible ACPI zone temperatures in Celsius, in enumeration
+        // order. Zones outside -50..150 C are treated as garbage (some boards
+        // report raw ambient placeholders). Throws when the class is
+        // unavailable or no zone is plausible.
+        private static List<float> ReadThermalZonesWmi()
         {
             if (_cpuTempSearcher == null)
             {
@@ -719,7 +1270,7 @@ namespace GpuModeSwitch
                     "root\\WMI", "SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature");
             }
 
-            float best = float.MinValue;
+            List<float> zones = new List<float>();
             using (ManagementObjectCollection results = _cpuTempSearcher.Get())
             {
                 foreach (ManagementObject zone in results)
@@ -733,9 +1284,9 @@ namespace GpuModeSwitch
                         }
                         float tenthsKelvin = Convert.ToUInt32(raw);
                         float celsius = tenthsKelvin / 10f - 273.15f;
-                        if (celsius > best && celsius > -50f && celsius < 150f)
+                        if (celsius > -50f && celsius < 150f)
                         {
-                            best = celsius;
+                            zones.Add(celsius);
                         }
                     }
                     catch
@@ -749,11 +1300,51 @@ namespace GpuModeSwitch
                 }
             }
 
-            if (best == float.MinValue)
+            if (zones.Count == 0)
             {
                 throw new InvalidOperationException("no usable MSAcpi_ThermalZoneTemperature reading");
             }
-            return best;
+            return zones;
+        }
+
+        // Mean of the plausible readings (-50..150 C); float.NaN when none.
+        // Public for the offline tests (probe harness).
+        public static float AverageZones(List<float> zoneCelsius)
+        {
+            float sum = 0f;
+            int n = 0;
+            if (zoneCelsius != null)
+            {
+                for (int i = 0; i < zoneCelsius.Count; i++)
+                {
+                    float c = zoneCelsius[i];
+                    if (c > -50f && c < 150f)
+                    {
+                        sum += c;
+                        n++;
+                    }
+                }
+            }
+            return n > 0 ? sum / n : float.NaN;
+        }
+
+        // Hottest plausible reading; float.NaN when none. Public for the
+        // offline tests (probe harness).
+        public static float HottestZone(List<float> zoneCelsius)
+        {
+            float best = float.MinValue;
+            if (zoneCelsius != null)
+            {
+                for (int i = 0; i < zoneCelsius.Count; i++)
+                {
+                    float c = zoneCelsius[i];
+                    if (c > best && c > -50f && c < 150f)
+                    {
+                        best = c;
+                    }
+                }
+            }
+            return best == float.MinValue ? float.NaN : best;
         }
 
         private static float ClampPct(float v)
@@ -765,68 +1356,178 @@ namespace GpuModeSwitch
     }
 
     // ---------------------------------------------------------------------
-    // Embeddable dark-theme panel: a grid of labeled bars (CPU %, RAM,
-    // Disk %, GPU %, GPU temp, CPU temp) plus an "updated HH:mm:ss" footer.
+    // Embeddable monitor panel (v1.3.0 rework): a TableLayoutPanel grid of
+    // labeled bars built dynamically from the engine's disk list and the
+    // disk-view selector -
+    //   CPU | CPU temp (avg) | CPU hotspot | RAM | Disk (C:) | Disk (D:) |
+    //   Disks (combined) | iGPU usage | iGPU temp | dGPU usage | dGPU temp |
+    //   footer
+    // CPU hotspot and iGPU temp have no driverless Windows API: those rows
+    // render dimmed with the value "n/a" and never a bar - honest
+    // placeholders, never faked readings. Colors come from the Ui.Mon*
+    // palette; ApplyTheme() re-reads it (MainForm.ApplyTheme calls it).
     // Deterministic TableLayoutPanel layout (LogForm pattern) that survives
-    // any DPI and resize; minimum 360x180. AttachToEngine/DetachFromEngine
-    // manage the SampleReady subscription; Dispose detaches on its own.
+    // any DPI and resize. AttachToEngine/DetachFromEngine manage the
+    // SampleReady subscription; Dispose detaches on its own.
     // ---------------------------------------------------------------------
     public class MonitorPanel : UserControl
     {
-        private const int RowCpu = 0;
-        private const int RowRam = 1;
-        private const int RowDisk = 2;
-        private const int RowGpu = 3;
-        private const int RowGpuTemp = 4;
-        private const int RowCpuTemp = 5;
-        private const int RowFooter = 6;
-
-        // Dark palette - same inline values as the rest of the UI (Theme.cs
-        // keeps colors at the call sites; ShimmerBar's track + MainForm's
-        // accent green are reused here).
-        private static readonly Color PanelBack = Color.FromArgb(24, 24, 28);
-        private static readonly Color BarTrack = Color.FromArgb(40, 40, 47);
-        private static readonly Color BarFill = Color.FromArgb(76, 195, 138);
-        private static readonly Color TextMain = Color.FromArgb(220, 220, 226);
-        private static readonly Color TextMuted = Color.FromArgb(150, 150, 158);
+        // One metric row. Bar is null on the dim "n/a" placeholder rows.
+        private class MonRow
+        {
+            public string Key;             // "cpu","cputemp","cpuhot","ram","diskall","igpu","igputemp","dgpu","dgputemp" or "disk:C:"
+            public Label Name;
+            public ProgressBar Bar;
+            public Label Value;
+            public bool Dim;
+        }
 
         private readonly TableLayoutPanel _grid = new TableLayoutPanel();
-        private readonly ProgressBar[] _bars = new ProgressBar[6];
-        private readonly Label[] _values = new Label[6];
+        private readonly List<MonRow> _rows = new List<MonRow>();
         private readonly Label _footer = new Label();
+        private readonly Label _footnote = new Label();
         private bool _attached;
+        private string _diskView = MonitorEngine.DefaultDiskView;
+        private string[] _builtForDisks = new string[0];   // letters the current rows were built for
 
         public MonitorPanel()
         {
             DoubleBuffered = true;
-            BackColor = PanelBack;
-            Size = new Size(430, 250);
-            MinimumSize = new Size(360, 180);
+            BackColor = Ui.MonPanelBack;
+            Size = new Size(430, 340);
+            MinimumSize = new Size(360, 200);
 
             _grid.Dock = DockStyle.Fill;
             _grid.ColumnCount = 3;
-            _grid.RowCount = 7;
             _grid.Padding = new Padding(10, 8, 10, 8);
-            _grid.BackColor = PanelBack;
+            _grid.BackColor = Ui.MonPanelBack;
             _grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));          // metric name
             _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));      // bar
             _grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));          // value
-            for (int i = 0; i < 7; i++)
+
+            _footer.Text = "updated --:--:--";
+            _footer.AutoSize = true;
+            _footer.TextAlign = ContentAlignment.MiddleLeft;
+            _footer.Margin = new Padding(0, 10, 0, 0);
+
+            // honest-capability footnote for the dim placeholder rows
+            _footnote.Text = "hotspot + iGPU temp need a kernel sensor driver \u2014 not readable on this Windows build";
+            _footnote.AutoSize = true;
+            _footnote.MaximumSize = new Size(650, 0);     // wraps instead of distorting the grid
+            _footnote.Font = new Font("Segoe UI", 8f);
+            _footnote.TextAlign = ContentAlignment.MiddleLeft;
+            _footnote.Margin = new Padding(0, 6, 0, 0);
+
+            Controls.Add(_grid);
+            RebuildRows(DiscoverDisks(), true);
+            ApplyThemeColors();
+        }
+
+        // ---- row construction ----------------------------------------------
+
+        // Which fixed disks to lay rows out for: the last real sample when
+        // the engine already ran, else the engine's discovered set (empty
+        // before the counters are built - the first sample rebuilds).
+        private static string[] DiscoverDisks()
+        {
+            MonitorSample last = MonitorEngine.LastSample;
+            if (last != null && last.DiskNames != null && last.DiskNames.Length > 0)
             {
-                _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                return last.DiskNames;
+            }
+            return MonitorEngine.FixedDisks;
+        }
+
+        private static bool SameDisks(string[] a, string[] b)
+        {
+            if (a == null || b == null || a.Length != b.Length)
+            {
+                return false;
+            }
+            for (int i = 0; i < a.Length; i++)
+            {
+                if (a[i] != b[i])
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // (Re)builds the whole row set: at construction, whenever the engine
+        // reports a different disk set, and when the disk view changes.
+        private void RebuildRows(string[] disks, bool force)
+        {
+            if (disks == null)
+            {
+                disks = new string[0];
+            }
+            if (!force && SameDisks(disks, _builtForDisks))
+            {
+                return;
+            }
+            _builtForDisks = disks;
+
+            _grid.SuspendLayout();
+            _grid.Controls.Clear();
+            _rows.Clear();
+            _grid.RowStyles.Clear();
+
+            AddRow("cpu", "CPU", false);
+            AddRow("cputemp", "CPU temp (avg)", false);
+            AddRow("cpuhot", "CPU hotspot", true);
+            AddRow("ram", "RAM", false);
+
+            if (_diskView == "combined")
+            {
+                AddRow("diskall", "Disks (combined)", false);
+            }
+            else
+            {
+                for (int i = 0; i < disks.Length; i++)
+                {
+                    if (_diskView == "C" && disks[i] != "C:") continue;
+                    if (_diskView == "D" && disks[i] != "D:") continue;
+                    AddRow("disk:" + disks[i], "Disk (" + disks[i] + ")", false);
+                }
+                AddRow("diskall", "Disks (combined)", false);
             }
 
-            string[] titles = new string[] { "CPU", "RAM", "Disk", "GPU", "GPU temp", "CPU temp" };
-            for (int i = 0; i < 6; i++)
-            {
-                Label name = new Label();
-                name.Text = titles[i];
-                name.AutoSize = true;
-                name.ForeColor = TextMuted;
-                name.BackColor = PanelBack;
-                name.TextAlign = ContentAlignment.MiddleLeft;
-                name.Margin = new Padding(0, 5, 8, 0);
+            AddRow("igpu", "iGPU usage", false);
+            AddRow("igputemp", "iGPU temp", true);
+            AddRow("dgpu", "dGPU usage", false);
+            AddRow("dgputemp", "dGPU temp", false);
 
+            int footerRow = _rows.Count;
+            _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _grid.Controls.Add(_footer, 0, footerRow);
+            _grid.SetColumnSpan(_footer, 3);
+
+            _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _grid.Controls.Add(_footnote, 0, footerRow + 1);
+            _grid.SetColumnSpan(_footnote, 3);
+
+            _grid.RowCount = footerRow + 2;
+            _grid.ResumeLayout(true);
+            Height = PreferredHeight;
+            ApplyThemeColors();
+        }
+
+        private void AddRow(string key, string title, bool dim)
+        {
+            MonRow r = new MonRow();
+            r.Key = key;
+            r.Dim = dim;
+
+            Label name = new Label();
+            name.Text = title;
+            name.AutoSize = true;
+            name.TextAlign = ContentAlignment.MiddleLeft;
+            name.Margin = new Padding(0, 5, 8, 0);
+            r.Name = name;
+
+            if (!dim)
+            {
                 ProgressBar bar = new ProgressBar();
                 bar.Minimum = 0;
                 bar.Maximum = 100;
@@ -837,39 +1538,62 @@ namespace GpuModeSwitch
                 // Classic-mode rendering honors ForeColor/BackColor, which the
                 // themed renderer ignores; re-applied whenever the handle is
                 // recreated (theme switch, DPI change, ...).
-                bar.ForeColor = BarFill;
-                bar.BackColor = BarTrack;
                 bar.HandleCreated += delegate { StyleBarHandle(bar); };
                 if (bar.IsHandleCreated)
                 {
                     StyleBarHandle(bar);
                 }
-
-                Label val = new Label();
-                val.Text = "--";
-                val.AutoSize = true;
-                val.ForeColor = TextMain;
-                val.BackColor = PanelBack;
-                val.TextAlign = ContentAlignment.MiddleLeft;
-                val.Margin = new Padding(0, 5, 0, 0);
-
-                _bars[i] = bar;
-                _values[i] = val;
-                _grid.Controls.Add(name, 0, i);
-                _grid.Controls.Add(bar, 1, i);
-                _grid.Controls.Add(val, 2, i);
+                r.Bar = bar;
             }
 
-            _footer.Text = "updated --:--:--";
-            _footer.AutoSize = true;
-            _footer.ForeColor = TextMuted;
-            _footer.BackColor = PanelBack;
-            _footer.TextAlign = ContentAlignment.MiddleLeft;
-            _footer.Margin = new Padding(0, 10, 0, 0);
-            _grid.Controls.Add(_footer, 0, RowFooter);
-            _grid.SetColumnSpan(_footer, 3);
+            Label val = new Label();
+            val.Text = dim ? "n/a" : "--";
+            val.AutoSize = true;
+            val.TextAlign = ContentAlignment.MiddleLeft;
+            val.Margin = new Padding(0, 5, 0, 0);
+            r.Value = val;
 
-            Controls.Add(_grid);
+            int row = _rows.Count;
+            _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _grid.Controls.Add(name, 0, row);
+            if (r.Bar != null)
+            {
+                _grid.Controls.Add(r.Bar, 1, row);
+            }
+            _grid.Controls.Add(val, 2, row);
+            _rows.Add(r);
+        }
+
+        // ---- public API ------------------------------------------------------
+
+        // Disk-view selector value ("C" / "D" / "both" / "combined"; anything
+        // else falls back to "both"). Rebuilds the rows.
+        public void SetDiskView(string view)
+        {
+            if (view != "C" && view != "D" && view != "combined")
+            {
+                view = "both";
+            }
+            if (view == _diskView)
+            {
+                return;
+            }
+            _diskView = view;
+            RebuildRows(DiscoverDisks(), true);
+        }
+
+        // Height that fits the current rows exactly - the monitor page uses
+        // it to place the controls under the panel.
+        public int PreferredHeight
+        {
+            get { return 30 + _rows.Count * 25 + 34; }
+        }
+
+        // Re-reads the Ui.Mon* palette (called at construction and by
+        // MainForm.ApplyTheme after a live theme change).
+        public void ApplyTheme()
+        {
+            ApplyThemeColors();
         }
 
         // Subscribes to the engine (idempotent) and immediately paints the
@@ -936,49 +1660,86 @@ namespace GpuModeSwitch
         {
             try
             {
-                SetBar(RowCpu, s.CpuPercent);
-                _values[RowCpu].Text = FmtPercent(s.CpuPercent);
+                string[] disks = s.DiskNames;
+                if (disks == null)
+                {
+                    disks = new string[0];
+                }
+                RebuildRows(disks, false);                // the row set follows the machine's fixed disks
 
                 double ramPct = s.RamTotalBytes > 0
                     ? s.RamUsedBytes * 100.0 / s.RamTotalBytes
                     : 0.0;
-                SetBar(RowRam, (float)ramPct);
-                _values[RowRam].Text = s.RamText;
 
-                SetBar(RowDisk, s.DiskActivePercent);
-                _values[RowDisk].Text = FmtPercent(s.DiskActivePercent);
-
-                if (s.HasGpu)
+                for (int i = 0; i < _rows.Count; i++)
                 {
-                    SetBar(RowGpu, s.GpuPercent);
-                    _values[RowGpu].Text = FmtPercent(s.GpuPercent);
-                }
-                else
-                {
-                    SetBar(RowGpu, 0f);
-                    _values[RowGpu].Text = "N/A";
-                }
-
-                if (s.HasGpuTemp)
-                {
-                    SetBar(RowGpuTemp, s.GpuTempC);       // 0-100 C on the same bar scale
-                    _values[RowGpuTemp].Text = FmtTemp(s.GpuTempC);
-                }
-                else
-                {
-                    SetBar(RowGpuTemp, 0f);
-                    _values[RowGpuTemp].Text = "N/A";
-                }
-
-                if (s.HasCpuTemp)
-                {
-                    SetBar(RowCpuTemp, s.CpuTempC);
-                    _values[RowCpuTemp].Text = FmtTemp(s.CpuTempC);
-                }
-                else
-                {
-                    SetBar(RowCpuTemp, 0f);
-                    _values[RowCpuTemp].Text = "N/A";
+                    MonRow r = _rows[i];
+                    if (r.Dim)
+                    {
+                        continue;                         // honest "n/a" placeholders - nothing to update
+                    }
+                    if (r.Key == "cpu")
+                    {
+                        SetRow(r, s.CpuPercent, FmtPercent(s.CpuPercent));
+                    }
+                    else if (r.Key == "cputemp")
+                    {
+                        if (s.HasCpuTempAvg)
+                        {
+                            SetRow(r, s.CpuTempAvgC, FmtTemp(s.CpuTempAvgC));
+                        }
+                        else if (s.HasCpuTemp)
+                        {
+                            SetRow(r, s.CpuTempC, FmtTemp(s.CpuTempC));   // single-zone machine: avg == hottest
+                        }
+                        else
+                        {
+                            SetNa(r);
+                        }
+                    }
+                    else if (r.Key == "ram")
+                    {
+                        SetRow(r, (float)ramPct, s.RamText);
+                    }
+                    else if (r.Key == "diskall")
+                    {
+                        SetRow(r, s.DiskActivePercent, FmtPercent(s.DiskActivePercent));
+                    }
+                    else if (r.Key.Length > 5 && r.Key.StartsWith("disk:", StringComparison.Ordinal))
+                    {
+                        string letter = r.Key.Substring(5);
+                        int idx = -1;
+                        if (s.DiskNames != null)
+                        {
+                            for (int d = 0; d < s.DiskNames.Length; d++)
+                            {
+                                if (s.DiskNames[d] == letter) { idx = d; break; }
+                            }
+                        }
+                        if (idx >= 0 && s.DiskPct != null && idx < s.DiskPct.Length)
+                        {
+                            SetRow(r, s.DiskPct[idx], FmtPercent(s.DiskPct[idx]));
+                        }
+                        else
+                        {
+                            SetNa(r);                     // drive vanished - no fake number
+                        }
+                    }
+                    else if (r.Key == "igpu")
+                    {
+                        if (s.HasIgpu) SetRow(r, s.IgpuPercent, FmtPercent(s.IgpuPercent));
+                        else SetNa(r);
+                    }
+                    else if (r.Key == "dgpu")
+                    {
+                        if (s.HasDgpu) SetRow(r, s.DgpuPercent, FmtPercent(s.DgpuPercent));
+                        else SetNa(r);
+                    }
+                    else if (r.Key == "dgputemp")
+                    {
+                        if (s.HasDgpuTemp) SetRow(r, s.DgpuTempC, FmtTemp(s.DgpuTempC));   // 0-100 C on the bar scale
+                        else SetNa(r);
+                    }
                 }
 
                 _footer.Text = "updated " + s.Timestamp.ToString("HH:mm:ss");
@@ -989,12 +1750,30 @@ namespace GpuModeSwitch
             }
         }
 
-        private void SetBar(int row, float value)
+        private void SetRow(MonRow r, float barValue, string text)
+        {
+            if (r.Bar != null)
+            {
+                SetBar(r.Bar, barValue);
+            }
+            r.Value.Text = text;
+        }
+
+        private void SetNa(MonRow r)
+        {
+            if (r.Bar != null)
+            {
+                SetBar(r.Bar, 0f);
+            }
+            r.Value.Text = "N/A";
+        }
+
+        private static void SetBar(ProgressBar bar, float value)
         {
             int v = (int)Math.Round(value);
             if (v < 0) v = 0;
             if (v > 100) v = 100;                         // ProgressBar.Value throws outside 0-100
-            _bars[row].Value = v;
+            bar.Value = v;
         }
 
         private static string FmtPercent(float value)
@@ -1005,6 +1784,34 @@ namespace GpuModeSwitch
         private static string FmtTemp(float celsius)
         {
             return string.Format(CultureInfo.InvariantCulture, "{0:0} \u00B0C", celsius);
+        }
+
+        // ---- theming ---------------------------------------------------------
+
+        private void ApplyThemeColors()
+        {
+            Color back = Ui.MonPanelBack;
+            Color dim = Ui.Shift(Ui.MonTextMuted, -0.35f);
+            BackColor = back;
+            _grid.BackColor = back;
+            for (int i = 0; i < _rows.Count; i++)
+            {
+                MonRow r = _rows[i];
+                r.Name.BackColor = back;
+                r.Name.ForeColor = r.Dim ? dim : Ui.MonTextMuted;
+                r.Value.BackColor = back;
+                r.Value.ForeColor = r.Dim ? dim : Ui.MonTextMain;
+                if (r.Bar != null)
+                {
+                    r.Bar.ForeColor = Ui.MonBarFill;
+                    r.Bar.BackColor = Ui.MonBarTrack;
+                }
+            }
+            _footer.BackColor = back;
+            _footer.ForeColor = dim;
+            _footnote.BackColor = back;
+            _footnote.ForeColor = dim;
+            Invalidate(true);
         }
 
         // Switches the ProgressBar to classic (non-visual-styles) rendering so

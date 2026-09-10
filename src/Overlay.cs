@@ -1,8 +1,11 @@
 //  Overlay.cs  (v1.1.0 - Wave 5, agent A17)
 //  -----------------------------------------
 //  Compact gaming overlay over the monitor engine (D6): a small frameless,
-//  always-on-top, semi-transparent window showing CPU / RAM / Disk / GPU
-//  readings from MonitorEngine (src\SystemMonitor.cs). Per D6 the monitor
+//  always-on-top, semi-transparent window showing CPU / RAM / Disk / dGPU /
+//  dGPU temp readings from MonitorEngine (src\SystemMonitor.cs), plus an
+//  iGPU row that appears only once the engine proves the iGPU phys mapping
+//  (v1.3.0 - the old "GPU" rows are labeled "dGPU" now that the two
+//  adapters are separate metrics). Per D6 the monitor
 //  only samples while the host wants it - the overlay never starts or stops
 //  the engine itself; while the engine is off the overlay shows a "monitor
 //  off" hint and keeps the last painted values.
@@ -51,8 +54,8 @@ namespace GpuModeSwitch
         private static readonly Color TextMuted = Color.FromArgb(150, 150, 158);
 
         private readonly TableLayoutPanel _grid = new TableLayoutPanel();
-        private readonly Label[] _names = new Label[5];
-        private readonly Label[] _values = new Label[5];
+        private readonly Label[] _names = new Label[6];
+        private readonly Label[] _values = new Label[6];
         private readonly Label _footer = new Label();
         private readonly Label _hint = new Label();
         private readonly System.Windows.Forms.Timer _hintTimer = new System.Windows.Forms.Timer();
@@ -96,15 +99,19 @@ namespace GpuModeSwitch
             _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             _grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));       // filler
 
-            // _values index order: 0 CPU, 1 RAM, 2 Disk, 3 GPU util, 4 GPU temp.
-            string[] names = { "CPU", "RAM", "Disk", "GPU", "GPU temp" };
-            for (int i = 0; i < 5; i++)
+            // _values index order: 0 CPU, 1 RAM, 2 Disk, 3 dGPU util, 4 dGPU
+            // temp, 5 iGPU util. The iGPU pair is only added to the grid once
+            // a sample proves HasIgpu (the footer slides into the filler row
+            // meanwhile) - the overlay stays compact either way.
+            string[] names = { "CPU", "RAM", "Disk", "dGPU", "dGPU temp", "iGPU" };
+            for (int i = 0; i < 6; i++)
             {
                 _names[i] = MakeLabel(names[i], TextMuted, 4);
                 _values[i] = MakeLabel("--", TextMain, 12);
             }
 
-            // Row 0: CPU + RAM. Row 1: Disk + GPU. Row 2: GPU temp + footer.
+            // Row 0: CPU + RAM. Row 1: Disk + dGPU. Row 2: dGPU temp + (iGPU
+            // or footer). Row 3 (filler): the footer while iGPU is shown.
             _grid.Controls.Add(_names[0], 0, 0);
             _grid.Controls.Add(_values[0], 1, 0);
             _grid.Controls.Add(_names[1], 2, 0);
@@ -147,7 +154,7 @@ namespace GpuModeSwitch
             MouseUp += OnDragEnd;
             WireDrag(this);
             WireDrag(_grid);
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 6; i++)
             {
                 WireDrag(_names[i]);
                 WireDrag(_values[i]);
@@ -279,9 +286,9 @@ namespace GpuModeSwitch
                 _values[0].Text = FmtPct1(s.CpuPercent);
                 _values[1].Text = FmtRam(s);
                 _values[2].Text = FmtPct0(s.DiskActivePercent);
-                if (s.HasGpu)
+                if (s.HasDgpu)
                 {
-                    _values[3].Text = FmtPct0(s.GpuPercent);
+                    _values[3].Text = FmtPct0(s.DgpuPercent);
                     _values[3].ForeColor = TextMain;
                 }
                 else
@@ -289,9 +296,9 @@ namespace GpuModeSwitch
                     _values[3].Text = "N/A";
                     _values[3].ForeColor = TextMuted;
                 }
-                if (s.HasGpuTemp)
+                if (s.HasDgpuTemp)
                 {
-                    _values[4].Text = FmtTemp(s.GpuTempC);
+                    _values[4].Text = FmtTemp(s.DgpuTempC);
                     _values[4].ForeColor = TextMain;
                 }
                 else
@@ -299,12 +306,51 @@ namespace GpuModeSwitch
                     _values[4].Text = "N/A";
                     _values[4].ForeColor = TextMuted;
                 }
+                if (s.HasIgpu)
+                {
+                    ShowIgpuRow();
+                    _values[5].Text = FmtPct0(s.IgpuPercent);
+                    _values[5].ForeColor = TextMain;
+                }
+                else
+                {
+                    HideIgpuRow();
+                }
                 _footer.Text = "updated " + s.Timestamp.ToString("HH:mm:ss");
             }
             catch
             {
                 // Cosmetic UI path only - a bad sample must never break the app.
             }
+        }
+
+        // The iGPU pair joins the grid only once the engine proved the phys
+        // mapping; the footer trades places with it so the overlay never
+        // grows a row. Both directions are idempotent.
+        private void ShowIgpuRow()
+        {
+            if (_values[5].Parent == _grid)
+            {
+                return;
+            }
+            _grid.Controls.Remove(_footer);
+            _grid.Controls.Add(_names[5], 2, 2);
+            _grid.Controls.Add(_values[5], 3, 2);
+            _grid.Controls.Add(_footer, 0, 3);
+            _grid.SetColumnSpan(_footer, 2);
+        }
+
+        private void HideIgpuRow()
+        {
+            if (_values[5].Parent != _grid)
+            {
+                return;
+            }
+            _grid.Controls.Remove(_names[5]);
+            _grid.Controls.Remove(_values[5]);
+            _grid.Controls.Remove(_footer);
+            _grid.Controls.Add(_footer, 2, 2);
+            _grid.SetColumnSpan(_footer, 2);
         }
 
         // Hint strip: visible exactly while the engine is not sampling. The

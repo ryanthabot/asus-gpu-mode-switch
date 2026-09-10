@@ -55,6 +55,14 @@ namespace GpuModeSwitch
         public static Color ProfileBarText = Color.FromArgb(210, 210, 216);
         public static Color ProfileBarDim = Color.FromArgb(140, 140, 148);
 
+        // Monitor deck surface (v1.3.0 sensor wave) - MonitorPanel reads
+        // these; the defaults are the exact v1.2 hard-coded look.
+        public static Color MonPanelBack = Color.FromArgb(24, 24, 28);
+        public static Color MonBarTrack = Color.FromArgb(40, 40, 47);
+        public static Color MonBarFill = Color.FromArgb(76, 195, 138);
+        public static Color MonTextMain = Color.FromArgb(220, 220, 226);
+        public static Color MonTextMuted = Color.FromArgb(150, 150, 158);
+
         // Header backdrop: GradEnabled=false paints the solid Ui.Bg (the
         // default - no visible gradient); true paints HeaderGradA ->
         // HeaderGradB, diagonally when GradDiagonal.

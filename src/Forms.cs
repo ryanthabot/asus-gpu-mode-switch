@@ -1320,7 +1320,7 @@ namespace GpuModeSwitch
             _startGo = startGo;
             _startEco = startEco;
 
-            Text = "GPU Mode Switch";
+            Text = "Big's GPU Switch & Game Optimizer";
             FormBorderStyle = FormBorderStyle.None;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -1433,16 +1433,17 @@ namespace GpuModeSwitch
 
         private void BuildHeader()
         {
-            _title.Text = "GPU MODE SWITCH";
-            _title.Font = new Font("Segoe UI", 15f, FontStyle.Bold);
+            _title.Text = "BIG'S GPU SWITCH & GAME OPTIMIZER";
+            _title.Font = new Font("Segoe UI", 14f, FontStyle.Bold);
             _title.ForeColor = Ui.Cyan;
             _title.BackColor = HeaderChildBack();
             _title.AutoSize = false;
-            _title.Size = new Size(310, 30);
+            _title.Size = new Size(380, 30);
             _title.TextAlign = ContentAlignment.MiddleLeft;
+            _title.AutoEllipsis = true;
             _title.Location = new Point(0, 0);    // placed by LayoutChrome
 
-            _subtitle.Text = "unified command deck  \u2022  both modes, one app";
+            _subtitle.Text = "dGPU Control & System Optimization";
             _subtitle.ForeColor = Ui.TextDim;
             _subtitle.BackColor = HeaderChildBack();
             _subtitle.AutoSize = true;
@@ -1527,6 +1528,10 @@ namespace GpuModeSwitch
             chip.AutoSize = false;
             chip.Size = new Size(170, 22);
             chip.TextAlign = ContentAlignment.MiddleLeft;
+            // single-line always: without this a long "Connected via ..." wraps
+            // to two lines and MiddleLeft centering lifts the visible line a
+            // few pixels above the neighboring chips
+            chip.AutoEllipsis = true;
             SetChip(chip, text, Ui.TextDim);
         }
 
@@ -2272,8 +2277,9 @@ namespace GpuModeSwitch
             _verLbl.Location = new Point(10, H - 40);
 
             _title.Location = new Point(18, 16);
+            _title.Width = Math.Min(380, _content.Width - 3 * (140 + 8) - 24 - 18 - 8);
             _subtitle.Location = new Point(20, 46);
-            int chipW = 170;
+            int chipW = 140;
             _chipBus.SetBounds(_content.Width - 3 * (chipW + 8) - 24, 16, chipW, 24);
             _chipGpu.SetBounds(_content.Width - 2 * (chipW + 8) - 24, 16, chipW, 24);
             _chipEs.SetBounds(_content.Width - (chipW + 8) - 24, 16, chipW, 24);
@@ -2649,7 +2655,12 @@ namespace GpuModeSwitch
             string gpu = _currentEco ? "dGPU OFF (Eco)" : "dGPU ON (Standard)";
             SetChip(_chipGpu, gpu, _currentEco ? Ui.Eco : Ui.Go);
             SetChip(_chipEs, "Energy Saver " + (_esOn ? "ON" : "OFF"), _esOn ? Ui.Eco : Ui.TextDim);
-            SetChip(_chipBus, _transport.Length > 0 ? _transport : "transport ?", Ui.Cyan);
+            // chip stays single-line: "Connected via ATK ACPI" is shortened;
+            // the Home page keeps the full phrase
+            string busChip = _transport.Length > 0
+                ? _transport.Replace("Connected via ", "via ")
+                : "transport ?";
+            SetChip(_chipBus, busChip, Ui.Cyan);
 
             _homeStateBig.Text = _currentEco ? "ECO" : "STANDARD";
             _homeStateBig.ForeColor = _currentEco ? Ui.Eco : Ui.Go;

@@ -3,7 +3,8 @@ rem ---------------------------------------------------------------------------
 rem Builds the unified executable using the C# compiler that ships with
 rem Windows. No Visual Studio, .NET SDK, or internet access required.
 rem
-rem   dist\GPU Mode Switch.exe  -> both modes in one app (v1.2.0, D10)
+rem   dist\Big's GPU Switch & Game Optimizer.exe  -> both modes in one app
+rem   (renamed from "GPU Mode Switch.exe" in v1.3.0)
 rem
 rem The retired v1.x pair (Go Time.exe / Eco Mode.exe, built with the
 rem MODE_STANDARD / MODE_ECO defines) is gone - the mode is chosen at
@@ -39,7 +40,7 @@ for /f "delims=" %%i in ('dir /b /ad "%WINDIR%\Microsoft.NET\assembly\GAC_MSIL\U
     /res:src\ecomode-256.png,GpuModeSwitch.ecomode.png ^
     /r:System.dll /r:"%WPFDIR%\WindowsBase.dll" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Management.dll /r:System.ServiceProcess.dll /r:System.Web.Extensions.dll ^
     /r:"%UIAC_DIR%\UIAutomationClient.dll" /r:"%UIAT_DIR%\UIAutomationTypes.dll" ^
-    /out:"dist\GPU Mode Switch.exe" src\*.cs
+    /out:"dist\Big's GPU Switch & Game Optimizer.exe" src\*.cs
 if errorlevel 1 exit /b 1
 
 echo.

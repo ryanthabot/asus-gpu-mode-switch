@@ -1,10 +1,26 @@
-# ASUS GPU Mode Switch — "Go Time" & "Eco Mode"
+# Big's GPU Switch & Game Optimizer — "Go Time" & "Eco Mode"
 
-**ONE app, both modes** (v1.2.0): **`GPU Mode Switch.exe`** switches the
+**ONE app, both modes**: **`Big's GPU Switch & Game Optimizer.exe`** (v1.3.0;
+formerly `GPU Mode Switch.exe`) switches the
 **GPU Mode** on ASUS laptops — the same Standard / Eco switch that lives in
 *Armoury Crate → Devices → System Settings → GPU Performance* — without
-opening Armoury Crate at all. Launch it and Home offers both modes; the old
-two-executable pair (Go Time.exe / Eco Mode.exe) is retired.
+opening Armoury Crate at all, then optimizes the session, monitors the
+hardware and themes itself to taste. Launch it and Home offers both modes;
+the old two-executable pair (Go Time.exe / Eco Mode.exe) is retired.
+
+> **v1.3.0** — **the "Big" release**: renamed to **Big's GPU Switch &
+> Game Optimizer** (tagline: *dGPU Control & System Optimization*); a
+> **10-app tray suite** (adds Wise Care 365, Overwolf, OpenBet LocatorT,
+> NVIDIA Broadcast, Wallpaper Engine — close on GO TIME, auto-restore on
+> Eco plus manual restore from Home/the session tray); **Monitor** gains
+> dGPU/iGPU/CPU-temp-average rows, per-disk (C:/D:) graphs with a disk-view
+> selector (honest "n/a" placeholders where Windows exposes no driverless
+> sensor); a full **theme engine** (presets, accent color picker, header
+> gradient, navigation-bar color, live apply); **Session History / Log
+> Browser popups restyled dark** to match the app (dark title bar,
+> Profile-bar-colored column headers, Segoe UI Semibold buttons); and the
+> header's "Connected via" chip alignment fixed. Details in
+> `CHANGELOG.md`.
 
 | Mode | What it does |
 |---|---|

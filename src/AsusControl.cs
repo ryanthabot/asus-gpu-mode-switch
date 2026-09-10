@@ -583,7 +583,7 @@ namespace GpuModeSwitch
             if (!Available) return _lastError + "\n\n(Log: " + Log.CurrentLogPath + ")";
 
             int gpu = GetDgpuState();
-            string s = "Connected via: " + _transport.Name + "\n";
+            string s = "Connected via " + _transport.Name + "\n";
             s += "dGPU control endpoint: 0x" + _dgpuId.ToString("X8") + "\n";
             s += "dGPU power: " + StateText(gpu, "enabled", "disabled (eco)") + "\n";
             if (MuxSupported)

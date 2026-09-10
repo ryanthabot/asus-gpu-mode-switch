@@ -1,4 +1,4 @@
-# Changelog — ASUS GPU Mode Switch (Go Time & Eco Mode)
+# Changelog — Big's GPU Switch & Game Optimizer (Go Time & Eco Mode)
 
 One human-readable running history of BOTH applications. This file is a
 fixed step of every release: a new version entry is appended every time an
@@ -6,6 +6,55 @@ error is repaired and every time a feature is added — entries are never
 renumbered or rewritten. Fuller prose for older versions lives in
 `README.md`; the authoritative code history is git; GitHub Releases carry
 the built executables.
+
+## v1.3.0 — 2026-09-09
+
+**The "Big" release: new name, theme engine, tray-app suite, monitor
+expansion and popup restyle.** The app is renamed **Big's GPU Switch &
+Game Optimizer** (`Big's GPU Switch & Game Optimizer.exe`, was
+`GPU Mode Switch.exe`) with the new tagline "dGPU Control & System
+Optimization". Logs keep living in `%LOCALAPPDATA%\GpuModeSwitch` so
+existing history is preserved.
+
+1. **Tray-app suite (10 apps, close on GO, restore on Eco).** The Optimize
+   page's tray group now detects **Wise Care 365, Overwolf, OpenBet
+   LocatorT, NVIDIA Broadcast and Wallpaper Engine** alongside the existing
+   Parsec, Google Drive, Jellyfin, Riot Client and Riot Vanguard (paths
+   field-verified on black-ice, with runtime fallback resolution via the
+   uninstall registry). Everything this app closes is remembered for the
+   session and **restarted automatically on the next Eco switch**; a
+   "Restore tray apps" action on Home and in the session tray menu restores
+   them on demand while in GO TIME. Watchdog services (Parsec, vgc,
+   WiseBootAssistant, OverwolfUpdater) are stopped first and restores use
+   each app's real autostart arguments (e.g. Broadcast's `--launch-hidden`,
+   Wallpaper Engine's `-silent`).
+2. **Monitor expansion.** New labeled rows: **CPU temp (avg)** (mean of the
+   ACPI thermal zones), **CPU hotspot** and **iGPU temp** (shown as honest
+   dimmed "n/a" — no driverless API on Windows reads Ryzen hotspot or
+   Radeon temps; a footnote says so), **iGPU usage** (best-effort, mapped
+   from GPU engine counters once the dGPU is identified by correlating
+   with nvidia-smi), and **dGPU usage / dGPU temp** as their own rows.
+   **Disk rows are now per-drive** — `Disk (C:)`, `Disk (D:)` … with a
+   Disk view selector (C: only / D: only / Both (separate) / Combined)
+   persisted beside the refresh rate. The overlay gained dGPU rows.
+3. **Theme engine + Theme page.** The whole palette is now runtime-mutable
+   with a new **Theme** page: five presets (Midnight — the classic look,
+   Carbon, Ocean, Ember, Frost), a custom accent color picker, a **header
+   gradient** (two colors, horizontal/diagonal), a **left-navigation color
+   picker**, and reset-to-default. Theme persists to
+   `%LOCALAPPDATA%\GpuModeSwitch\theme.txt` and applies live.
+4. **Popup restyle.** Session History and Log Browser now wear a **dark
+   title bar** (DWM immersive dark), owner-drawn dark **column headers**
+   matching the Optimize page's Profile bar, and the shared tool-button
+   recipe (Segoe UI Semibold) also adopted by the Profile bar's
+   Apply/Save/Delete/Refresh everywhere. Fixed en route: a latent
+   LogBrowser constructor crash (SplitContainer Panel2MinSize set before
+   the control was sized).
+5. **Header alignment fix.** The "Connected via ..." chip wrapped to two
+   lines and rode a few pixels high next to its neighbors; chips are now
+   single-line (AutoEllipsis, shortened "via ..." text) and the chip row
+   was slimmed to make room for the longer app title. Minimize/exit
+   buttons untouched.
 
 ## v1.2.2 — 2026-09-08
 
